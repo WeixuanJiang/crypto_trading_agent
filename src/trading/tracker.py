@@ -44,18 +44,27 @@ class Trade:
     is_closed: bool = False
 
 class TradeTracker:
-    """Comprehensive trade tracking and P&L calculation system"""
+    """Comprehensive trade tracking and P&L calculation system with database support"""
     
-    def __init__(self, data_dir: str = "trading_data"):
+    def __init__(self, data_dir: str = "trading_data", db_manager=None, trade_repository=None):
         self.data_dir = data_dir
         self.trades_file = os.path.join(data_dir, "trades.json")
         self.portfolio_file = os.path.join(data_dir, "portfolio.json")
         
-        # Create data directory if it doesn't exist
+        # Database components
+        self.db_manager = db_manager
+        self.trade_repository = trade_repository
+        self.use_database = db_manager is not None and trade_repository is not None
+        
+        # Create data directory if it doesn't exist (fallback for JSON)
         os.makedirs(data_dir, exist_ok=True)
         
         # Load existing data
-        self.trades: List[Trade] = self._load_trades()
+        if self.use_database:
+            self.trades: List[Trade] = self._load_trades_from_db()
+        else:
+            self.trades: List[Trade] = self._load_trades()
+        
         self.portfolio = self._load_portfolio()
         
         # Initialize portfolio if empty
@@ -69,8 +78,39 @@ class TradeTracker:
                 "last_updated": datetime.now().isoformat()
             }
     
+    def _load_trades_from_db(self) -> List[Trade]:
+        """Load trades from database"""
+        try:
+            if self.trade_repository:
+                db_trades = self.trade_repository.get_all()
+                # Convert database trades to TradeTracker Trade format
+                trades = []
+                for db_trade in db_trades:
+                    trade = Trade(
+                        id=db_trade.id,
+                        timestamp=db_trade.timestamp.isoformat(),
+                        symbol=db_trade.symbol,
+                        action=db_trade.action.value,
+                        price=float(db_trade.price),
+                        size=float(db_trade.quantity),
+                        value=float(db_trade.value),
+                        confidence=db_trade.confidence,
+                        order_id=db_trade.order_id,
+                        status=db_trade.status.value,
+                        fees=float(db_trade.fees),
+                        stop_loss=float(db_trade.stop_loss) if db_trade.stop_loss else None,
+                        take_profit=float(db_trade.take_profit) if db_trade.take_profit else None,
+                        pnl=float(db_trade.pnl) if db_trade.pnl else None
+                    )
+                    trades.append(trade)
+                return trades
+            return []
+        except Exception as e:
+            print(f"Error loading trades from database: {e}")
+            return []
+    
     def _load_trades(self) -> List[Trade]:
-        """Load trades from JSON file"""
+        """Load trades from JSON file (fallback)"""
         if not os.path.exists(self.trades_file):
             return []
         
@@ -83,7 +123,12 @@ class TradeTracker:
             return []
     
     def _save_trades(self):
-        """Save trades to JSON file"""
+        """Save trades to database or JSON file"""
+        if self.use_database:
+            # Database saves are handled in log_trade method
+            return
+        
+        # Fallback to JSON file
         try:
             trades_data = [asdict(trade) for trade in self.trades]
             with open(self.trades_file, 'w') as f:
@@ -138,9 +183,41 @@ class TradeTracker:
             take_profit=take_profit
         )
         
-        self.trades.append(trade)
+        # Save to database if available
+        if self.use_database and self.trade_repository:
+            try:
+                from src.data.models import Trade as DbTrade, TradeAction, TradeStatus
+                from decimal import Decimal
+                
+                db_trade = DbTrade(
+                    id=trade_id,
+                    timestamp=datetime.now(),
+                    symbol=symbol,
+                    action=TradeAction(action),
+                    price=Decimal(str(price)),
+                    quantity=Decimal(str(size)),
+                    value=Decimal(str(value)),
+                    confidence=confidence,
+                    status=TradeStatus(status.upper()),
+                    order_id=order_id,
+                    fees=Decimal(str(fees)),
+                    stop_loss=Decimal(str(stop_loss)) if stop_loss else None,
+                    take_profit=Decimal(str(take_profit)) if take_profit else None
+                )
+                
+                self.trade_repository.create(db_trade)
+                print(f"✅ Trade saved to database: {trade_id}")
+            except Exception as e:
+                print(f"⚠️ Failed to save trade to database: {e}")
+                # Fall back to JSON storage
+                self.trades.append(trade)
+                self._save_trades()
+        else:
+            # Use JSON storage
+            self.trades.append(trade)
+            self._save_trades()
+        
         self._update_portfolio(trade)
-        self._save_trades()
         self._save_portfolio()
         
         return trade_id

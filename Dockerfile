@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p logs trading_data
+RUN mkdir -p logs trading_data data
 
 # Set permissions
 RUN chmod +x main.py

@@ -17,8 +17,8 @@ class EnhancedTradeTracker(TradeTracker):
     to maintain compatibility with the main application.
     """
     
-    def __init__(self, data_dir: str = "trading_data"):
-        super().__init__(data_dir)
+    def __init__(self, data_dir: str = "trading_data", db_manager=None, trade_repository=None):
+        super().__init__(data_dir, db_manager, trade_repository)
         self.notification_service = NotificationService()
     
     def send_system_alert(self, message: str, subject: str = "Crypto Trading Agent Alert"):
@@ -75,11 +75,11 @@ class EnhancedTradeTracker(TradeTracker):
         
         return trade_id
 
-def create_trade_tracker():
+def create_trade_tracker(db_manager=None, trade_repository=None):
     """
     Create and return an EnhancedTradeTracker instance
     
     This function maintains compatibility with the existing codebase
     while using the local TradeTracker with notification capabilities.
     """
-    return EnhancedTradeTracker()
+    return EnhancedTradeTracker(db_manager=db_manager, trade_repository=trade_repository)

@@ -101,7 +101,32 @@ The application automatically detects Docker environments and enables automated 
 - AWS account with Bedrock access (optional, for LLM features)
 - AWS CLI configured or AWS credentials set up
 
-### Setup
+### Quick Start (New One-Command Startup)
+
+We've added comprehensive startup scripts for all platforms:
+
+#### Windows Users
+```bash
+# PowerShell (Recommended)
+.\start_windows.ps1
+
+# Batch file
+start_windows.bat
+
+# Python launcher (cross-platform)
+python launcher.py
+```
+
+#### Linux/macOS Users
+```bash
+# Shell script
+./start.sh
+
+# Python launcher
+python3 launcher.py
+```
+
+### Traditional Setup
 
 1. **Clone or create the project directory:**
 ```bash
@@ -135,6 +160,13 @@ AWS_CROSS_REGION_INFERENCE=true
 The `.env` file is automatically loaded when the `CryptoTradingAgent` is initialized, so you don't need to manually set environment variables.
 
 **Important**: For auto trading, ensure your KuCoin API key has trading permissions enabled.
+
+### With Streamlit Dashboard
+The new startup scripts automatically start both:
+- **Backend Trading Agent**: http://localhost:5001
+- **Streamlit Dashboard**: http://localhost:8501
+
+For detailed startup instructions, see [STARTUP_GUIDE.md](STARTUP_GUIDE.md)
 
 ### KuCoin API Setup
 

@@ -96,9 +96,14 @@ class MarketDataManager:
     def get_current_price(self, symbol: str) -> float:
         """Get current price for a symbol"""
         try:
+            print(f"DEBUG: Attempting to get ticker for {symbol}")
             ticker = self.retry_api_call(self.client.get_ticker, symbol)
+            print(f"DEBUG: Ticker result for {symbol}: {ticker}")
             if ticker:
-                return float(ticker['price'])
+                price = float(ticker['price'])
+                print(f"DEBUG: Extracted price for {symbol}: {price}")
+                return price
+            print(f"DEBUG: No ticker data returned for {symbol}")
             return None
         except Exception as e:
             print(f"Error fetching current price for {symbol}: {e}")

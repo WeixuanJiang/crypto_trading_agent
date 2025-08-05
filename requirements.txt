@@ -17,3 +17,7 @@ flake8
 mypy
 bandit
 safety
+streamlit>=1.28.0
+plotly>=5.15.0
+pandas>=2.0.0
+python-dotenv>=1.0.0

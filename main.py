@@ -5,6 +5,9 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import threading
 
 from kucoin.client import Client
 from src.strategy.llm_strategy import LLMTradingStrategy
@@ -46,14 +49,21 @@ class CryptoTradingAgent:
         self.user_client = self.client
         self.market_client = self.client
         
-        # Initialize components
+        # Initialize database and repositories
+        from src.data import DatabaseManager, TradeRepository, PositionRepository, MarketDataRepository
+        self.db_manager = DatabaseManager()
+        self.trade_repository = TradeRepository(self.db_manager)
+        self.position_repository = PositionRepository(self.db_manager)
+        self.market_data_repository = MarketDataRepository(self.db_manager)
+        
+        # Initialize components with database support
         self.market_data = MarketDataManager(self.market_client)
         self.risk_manager = RiskManager()
         self.trade_tracker = create_trade_tracker()
         
         # Initialize portfolio manager
         from src.portfolio.manager import PortfolioManager
-        self.portfolio_manager = PortfolioManager(self.user_client, self.market_client, self.trade_tracker, config)
+        self.portfolio_manager = PortfolioManager(self.user_client, self.market_client, self.trade_tracker, config, self.db_manager, self.position_repository)
         
         # Initialize trading strategy with AWS Bedrock
         self.fast_mode = fast_mode
@@ -90,6 +100,16 @@ class CryptoTradingAgent:
         mode = "AUTO TRADING" if auto_trading_enabled else "PAPER TRADING"
         speed_mode = "FAST" if fast_mode else "FULL"
         logger.info(f"🚀 Agent initialized in {mode} mode ({speed_mode} analysis)")
+        
+        # Flask server setup
+        self.app = None
+        self.server_thread = None
+        self.server_running = False
+        
+        # Initialize memory log handler for real-time logs
+        self.log_memory = []
+        self.max_log_entries = 1000
+        self._setup_memory_log_handler()
         
         # Initialize portfolio data
         self._update_portfolio_data()
@@ -131,6 +151,46 @@ class CryptoTradingAgent:
             sys.exit(1)
         
         return api_key, api_secret, api_passphrase
+    
+    def _setup_memory_log_handler(self):
+        """Setup memory log handler to capture logs for real-time display"""
+        import logging
+        
+        class MemoryLogHandler(logging.Handler):
+            def __init__(self, log_memory, max_entries):
+                super().__init__()
+                self.log_memory = log_memory
+                self.max_entries = max_entries
+            
+            def emit(self, record):
+                try:
+                    log_entry = {
+                        'timestamp': datetime.fromtimestamp(record.created).strftime('%H:%M:%S'),
+                        'level': record.levelname,
+                        'message': self.format(record)
+                    }
+                    
+                    # Add to memory (newest first)
+                    self.log_memory.insert(0, log_entry)
+                    
+                    # Keep only max_entries
+                    if len(self.log_memory) > self.max_entries:
+                        self.log_memory.pop()
+                        
+                except Exception:
+                    pass  # Ignore errors in logging
+        
+        # Create and add memory handler to root logger
+        memory_handler = MemoryLogHandler(self.log_memory, self.max_log_entries)
+        memory_handler.setLevel(logging.INFO)
+        
+        # Get the root logger and add our handler
+        root_logger = logging.getLogger()
+        root_logger.addHandler(memory_handler)
+    
+    def get_recent_logs(self, limit: int = 50) -> List[Dict]:
+        """Get recent logs from memory"""
+        return self.log_memory[:limit]
     
     def get_account_balance(self) -> float:
         """Get USDT account balance with retry mechanism"""
@@ -174,6 +234,323 @@ class CryptoTradingAgent:
             
         except Exception as e:
             logger.error(f"❌ Error updating portfolio data: {e}")
+    
+    def setup_flask_server(self, host='127.0.0.1', port=5001):
+        """Setup Flask server with API endpoints"""
+        self.app = Flask(__name__)
+        CORS(self.app)
+        
+        @self.app.route('/', methods=['GET'])
+        def index():
+            """Root endpoint with API information"""
+            return jsonify({
+                'name': 'Crypto Trading Agent API',
+                'version': '1.0.0',
+                'status': 'running',
+                'endpoints': {
+                    'GET /api/status': 'Get trading agent status',
+                    'POST /api/trading/start': 'Start trading',
+                    'POST /api/trading/stop': 'Stop trading',
+                    'POST /api/trading/toggle': 'Toggle auto trading',
+                    'GET /api/trading/history': 'Get trading history',
+                    'POST /api/analysis/run': 'Run analysis',
+                    'GET /api/portfolio': 'Get portfolio status',
+                    'POST /api/settings/update': 'Update settings'
+                },
+                'documentation': 'Visit the endpoints above for trading operations'
+            })
+        
+        @self.app.route('/api/status', methods=['GET'])
+        def get_status():
+            """Get current trading agent status"""
+            try:
+                balance = self.get_account_balance()
+                return jsonify({
+                    'success': True,
+                    'status': {
+                        'auto_trading': self.auto_trading_enabled,
+                        'is_running': self.is_running,
+                        'fast_mode': self.fast_mode,
+                        'trading_pairs': self.trading_pairs,
+                        'balance': balance,
+                        'daily_trade_count': self.daily_trade_count,
+                        'max_daily_trades': self.max_daily_trades,
+                        'min_confidence_threshold': self.min_confidence_threshold,
+                        'trading_interval_minutes': self.trading_interval_minutes,
+                        'last_update': datetime.now().isoformat()
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Error getting status: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/trading/start', methods=['POST'])
+        def start_trading():
+            """Start automated trading"""
+            try:
+                data = request.get_json() or {}
+                paper_trading = data.get('paper_trading', True)
+                
+                if not paper_trading:
+                    self.enable_auto_trading()
+                else:
+                    self.auto_trading_enabled = False
+                
+                if not self.is_running:
+                    self.start_automated_trading()
+                
+                logger.info(f"Trading started - Paper: {paper_trading}")
+                return jsonify({
+                    'success': True,
+                    'message': 'Trading started successfully',
+                    'auto_trading': self.auto_trading_enabled,
+                    'is_running': self.is_running
+                })
+            except Exception as e:
+                logger.error(f"Error starting trading: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/trading/stop', methods=['POST'])
+        def stop_trading():
+            """Stop automated trading"""
+            try:
+                self.is_running = False
+                self.disable_auto_trading()
+                
+                logger.info("Trading stopped")
+                return jsonify({
+                    'success': True,
+                    'message': 'Trading stopped successfully',
+                    'auto_trading': self.auto_trading_enabled,
+                    'is_running': self.is_running
+                })
+            except Exception as e:
+                logger.error(f"Error stopping trading: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/trading/toggle', methods=['POST'])
+        def toggle_auto_trading():
+            """Toggle auto trading mode"""
+            try:
+                if self.auto_trading_enabled:
+                    self.disable_auto_trading()
+                    message = "Auto trading disabled"
+                else:
+                    self.enable_auto_trading()
+                    message = "Auto trading enabled"
+                
+                logger.info(message)
+                return jsonify({
+                    'success': True,
+                    'message': message,
+                    'auto_trading': self.auto_trading_enabled
+                })
+            except Exception as e:
+                logger.error(f"Error toggling auto trading: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/trading/history', methods=['GET'])
+        def get_trading_history():
+            """Get trading history with optional filtering"""
+            try:
+                # Get query parameters
+                limit = request.args.get('limit', 50, type=int)
+                symbol = request.args.get('symbol')
+                days = request.args.get('days', 30, type=int)
+                
+                # Get trade history from trade tracker
+                trades = self.trade_tracker.get_trade_history(limit=limit)
+                
+                # Filter by symbol if specified
+                if symbol:
+                    trades = [trade for trade in trades if trade.get('symbol') == symbol]
+                
+                # Get trading statistics
+                stats = self.get_trading_stats(days=days)
+                
+                return jsonify({
+                    'success': True,
+                    'trades': trades,
+                    'statistics': stats,
+                    'total_trades': len(trades),
+                    'last_update': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting trading history: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/analysis/run', methods=['POST'])
+        def run_analysis():
+            """Run analysis cycle"""
+            try:
+                data = request.get_json() or {}
+                symbol = data.get('symbol')
+                
+                if symbol:
+                    # Analyze specific symbol
+                    result = self.analyze_symbol(symbol)
+                    return jsonify({
+                        'success': True,
+                        'message': f'Analysis completed for {symbol}',
+                        'analysis': result
+                    })
+                else:
+                    # Run full analysis cycle
+                    self.run_analysis_cycle()
+                    return jsonify({
+                        'success': True,
+                        'message': 'Analysis cycle completed'
+                    })
+            except Exception as e:
+                logger.error(f"Error running analysis: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/portfolio', methods=['GET'])
+        def get_portfolio():
+            """Get portfolio status"""
+            try:
+                self._update_portfolio_data()
+                portfolio_data = self.portfolio_manager.get_portfolio_summary()
+                balance = self.get_account_balance()
+                
+                # Convert positions dict to list format for better API compatibility
+                positions_dict = portfolio_data.get('positions', {})
+                positions_list = []
+                for symbol, position_data in positions_dict.items():
+                    position_info = position_data.copy()
+                    position_info['symbol'] = symbol
+                    positions_list.append(position_info)
+                
+                return jsonify({
+                    'success': True,
+                    'portfolio': {
+                        'balance': balance,
+                        'positions': positions_list,
+                        'total_value': portfolio_data.get('total_portfolio_value', 0),
+                        'unrealized_pnl': portfolio_data.get('total_unrealized_pnl', 0),
+                        'last_update': datetime.now().isoformat()
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Error getting portfolio: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/settings/update', methods=['POST'])
+        def update_settings():
+            """Update trading settings"""
+            try:
+                data = request.get_json() or {}
+                
+                if 'trading_pairs' in data:
+                    self.trading_pairs = data['trading_pairs']
+                
+                if 'min_confidence_threshold' in data:
+                    self.min_confidence_threshold = float(data['min_confidence_threshold'])
+                
+                if 'max_daily_trades' in data:
+                    self.max_daily_trades = int(data['max_daily_trades'])
+                
+                if 'trading_interval_minutes' in data:
+                    self.trading_interval_minutes = int(data['trading_interval_minutes'])
+                
+                logger.info("Settings updated successfully")
+                return jsonify({
+                    'success': True,
+                    'message': 'Settings updated successfully',
+                    'settings': {
+                        'trading_pairs': self.trading_pairs,
+                        'min_confidence_threshold': self.min_confidence_threshold,
+                        'max_daily_trades': self.max_daily_trades,
+                        'trading_interval_minutes': self.trading_interval_minutes
+                    }
+                })
+            except Exception as e:
+                logger.error(f"Error updating settings: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/market/price/<symbol>', methods=['GET'])
+        def get_market_price(symbol):
+            """Get real-time market price data for a symbol"""
+            try:
+                logger.info(f"Fetching market price for symbol: {symbol}")
+                # Get current price using market data manager
+                current_price = self.market_data.get_current_price(symbol)
+                logger.info(f"Current price result for {symbol}: {current_price}")
+                if current_price is None:
+                    logger.error(f"Market data manager returned None for {symbol}")
+                    return jsonify({'success': False, 'error': f'Could not fetch price for {symbol}'}), 404
+                
+                # Get 24hr stats for additional data
+                try:
+                    ticker = self.market_client.get_24hr_stats(symbol)
+                    price_change = float(ticker.get('changeRate', 0)) * 100  # Convert to percentage
+                    volume = float(ticker.get('vol', 0))
+                    high_24h = float(ticker.get('high', current_price))
+                    low_24h = float(ticker.get('low', current_price))
+                except Exception as e:
+                    logger.warning(f"Could not get 24hr stats for {symbol}: {e}")
+                    price_change = 0.0
+                    volume = 0.0
+                    high_24h = current_price
+                    low_24h = current_price
+                
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'price': current_price,
+                    'price_change_percent': price_change,
+                    'volume_24h': volume,
+                    'high_24h': high_24h,
+                    'low_24h': low_24h,
+                    'timestamp': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting market price for {symbol}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        @self.app.route('/api/logs', methods=['GET'])
+        def get_logs():
+            """Get recent trading logs"""
+            try:
+                # Get query parameters
+                limit = int(request.args.get('limit', 50))
+                
+                # Get logs from memory handler
+                logs = self.get_recent_logs(limit)
+                
+                return jsonify({
+                    'success': True,
+                    'logs': logs,
+                    'total_count': len(logs),
+                    'timestamp': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting logs: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+        
+        self.server_host = host
+        self.server_port = port
+        logger.info(f"Flask server configured on {host}:{port}")
+    
+    def start_flask_server(self):
+        """Start Flask server in a separate thread"""
+        if not self.app:
+            logger.error("Flask server not configured. Call setup_flask_server() first.")
+            return
+        
+        def run_server():
+            self.server_running = True
+            logger.info(f"🌐 Starting Flask API server on http://{self.server_host}:{self.server_port}")
+            self.app.run(host=self.server_host, port=self.server_port, debug=False, threaded=True)
+        
+        self.server_thread = threading.Thread(target=run_server, daemon=True)
+        self.server_thread.start()
+        time.sleep(1)  # Give server time to start
+    
+    def stop_flask_server(self):
+        """Stop Flask server"""
+        self.server_running = False
+        logger.info("Flask server stopped")
     
     def analyze_symbol(self, symbol: str, use_llm: bool = False) -> Dict:
         """Perform comprehensive analysis on a trading symbol with portfolio awareness"""
@@ -620,9 +997,9 @@ class CryptoTradingAgent:
         
         return analysis_results
     
-    def start_trading(self, interval_minutes: int = None):
+    def start_trading(self, interval_minutes: int):
         """Start the trading bot with specified interval"""
-        if interval_minutes is None:
+        if interval_minutes is not None:
             interval_minutes = self.trading_interval_minutes
         
         logger.info(f"Starting trading bot with {interval_minutes} minute intervals...")
@@ -887,7 +1264,7 @@ class CryptoTradingAgent:
             return excel_file
         except Exception as e:
             logger.error(f"❌ Failed to export to Excel: {e}")
-            return None
+            return ""
     
     def start_automated_trading(self):
         """Start automated trading - alias for start_trading method"""
@@ -965,39 +1342,24 @@ Please check the trading agent logs for more details.
 
 
 def main():
-    """Enhanced main function with auto-mode support for EC2 deployment"""
+    """Main function to start Flask API server"""
     import argparse
     
-    parser = argparse.ArgumentParser(description='Crypto Trading Agent')
-    parser.add_argument('--auto-mode', action='store_true', 
-                       help='Run in automated mode (for EC2 deployment)')
+    parser = argparse.ArgumentParser(description='Crypto Trading Agent Flask API Server')
+    parser.add_argument('--host', default='127.0.0.1', help='Host to bind the server to')
+    parser.add_argument('--port', type=int, default=5001, help='Port to bind the server to')
     parser.add_argument('--auto-trading', action='store_true',
-                       help='Enable automatic trading execution')
-    parser.add_argument('--paper-trading', action='store_true',
-                       help='Force paper trading mode')
+                       help='Enable automatic trading execution on startup')
     parser.add_argument('--check-aws', action='store_true',
                        help='Check AWS service status and exit')
     
     args = parser.parse_args()
     
-    # Auto-detect Docker environment and enable auto-mode
-    is_docker = os.getenv('DOCKER_CONTAINER', 'false').lower() == 'true' or os.path.exists('/.dockerenv')
-    auto_mode = args.auto_mode or is_docker
-    
-    # Determine auto trading setting
-    auto_trading_enabled = args.auto_trading and not args.paper_trading
+    # Load environment variables
+    load_dotenv()
     
     # Initialize agent
-    agent = CryptoTradingAgent(auto_trading_enabled=auto_trading_enabled)
-    
-    # Display trading mode
-    if auto_trading_enabled:
-        logger.info("🚀 Auto Trading: ENABLED - Real trades will be executed")
-    else:
-        logger.info("📊 Auto Trading: DISABLED - Analysis only mode")
-    
-    if is_docker:
-        logger.info("🐳 Docker environment detected - running in automated mode")
+    agent = CryptoTradingAgent(auto_trading_enabled=args.auto_trading)
     
     # Check AWS status if requested
     if args.check_aws:
@@ -1005,76 +1367,37 @@ def main():
         return
     
     try:
-        if auto_mode:
-            # Run in automated mode for EC2
-            logger.info("🚀 Starting Crypto Trading Agent in automated mode...")
-            agent.send_startup_notification()
+        # Setup and start Flask server
+        agent.setup_flask_server(host=args.host, port=args.port)
+        agent.start_flask_server()
+        
+        print("\n🚀 Crypto Trading Agent Flask Server Started!")
+        print(f"📊 API Server: http://{args.host}:{args.port}")
+        print("\n📋 Available API Endpoints:")
+        print("  GET  /api/status          - Get trading agent status")
+        print("  POST /api/trading/start   - Start trading")
+        print("  POST /api/trading/stop    - Stop trading")
+        print("  POST /api/trading/toggle  - Toggle auto trading")
+        print("  POST /api/analysis/run    - Run analysis")
+        print("  GET  /api/portfolio       - Get portfolio status")
+        print("  POST /api/settings/update - Update settings")
+        print("\n💡 Use Ctrl+C to stop the server")
+        
+        # Send startup notification
+        agent.send_startup_notification()
+        
+        # Keep the main thread alive
+        while agent.server_running:
+            time.sleep(1)
             
-            # Run continuous trading loop
-            import time
-            while True:
-                try:
-                    agent.run_analysis_cycle()
-                    
-                    # Wait for next cycle with proper message
-                    interval_minutes = agent.trading_interval_minutes
-                    logger.info(f"\n⏰ Waiting {interval_minutes} minutes until next analysis...")
-                    time.sleep(interval_minutes * 60)
-                except KeyboardInterrupt:
-                    logger.info("\n🛑 Shutting down trading agent...")
-                    agent.send_shutdown_notification()
-                    break
-                except Exception as e:
-                    agent.send_error_notification(str(e), "automated_mode")
-                    logger.warning("\n⚠️ Error occurred, waiting 1 minute before retrying...")
-                    time.sleep(60)  # Wait 1 minute before retrying
-        else:
-            # Run interactive mode
-            while True:
-                trading_status = "🚀 ENABLED" if agent.auto_trading_enabled else "📊 DISABLED"
-                logger.info("\n" + "="*60)
-                logger.info("🤖 CRYPTO TRADING AGENT")
-                logger.info(f"Auto Trading: {trading_status}")
-                logger.info("="*60)
-                logger.info("1. 📊 Run single analysis cycle")
-                logger.info("2. 🚀 Start automated trading")
-                logger.info("3. 💰 Show portfolio status")
-                logger.info("4. 🔍 Analyze specific symbol")
-                logger.info("5. 🔧 Check AWS status")
-                logger.info("6. ⚙️  Toggle auto trading")
-                logger.info("7. 🚪 Exit")
-                logger.info("="*60)
-                
-                choice = input("\nSelect option (1-7): ").strip()
-                
-                if choice == '1':
-                    agent.run_analysis_cycle()
-                elif choice == '2':
-                    agent.start_automated_trading()
-                elif choice == '3':
-                    agent.show_portfolio_status()
-                elif choice == '4':
-                    symbol = input("Enter symbol (e.g., BTC-USDT): ").strip().upper()
-                    if symbol:
-                        agent.analyze_symbol(symbol)
-                elif choice == '5':
-                    agent.check_aws_status()
-                elif choice == '6':
-                    if agent.auto_trading_enabled:
-                        agent.disable_auto_trading()
-                        logger.info("📊 Auto trading disabled")
-                    else:
-                        agent.enable_auto_trading()
-                        logger.info("🚀 Auto trading enabled")
-                elif choice == '7':
-                    logger.info("\n👋 Goodbye!")
-                    agent.send_shutdown_notification()
-                    break
-                else:
-                    logger.warning("❌ Invalid option. Please try again.")
-                    
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down server...")
+        agent.stop_flask_server()
+        agent.send_shutdown_notification()
+        print("✅ Server stopped successfully")
     except Exception as e:
-        agent.send_error_notification(str(e), "main_function")
+        agent.send_error_notification(str(e), "flask_server")
+        logger.error(f"❌ Server error: {e}")
         raise
 
 
