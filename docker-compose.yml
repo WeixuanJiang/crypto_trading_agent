@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  crypto-trading-agent:
+    build: .
+    container_name: crypto-trading-agent
+    environment:
+      - LOG_LEVEL=INFO
+      - LOG_TO_FILE=true
+      - LOG_FILE_PATH=/app/logs/trading_agent.log
+      - MAX_LOG_FILE_SIZE_MB=10
+      - LOG_BACKUP_COUNT=5
+    volumes:
+      # Persistent data storage
+      - ./trading_data:/app/trading_data
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+networks:
+  trading-network:
+    driver: bridge
+
+volumes:
+  trading_data:
+  logs:
