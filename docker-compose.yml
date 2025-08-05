@@ -4,6 +4,7 @@ services:
   crypto-trading-agent:
     build: .
     container_name: crypto-trading-agent
+    command: ["python", "main.py", "--auto-trading"]
     environment:
       - LOG_LEVEL=INFO
       - LOG_TO_FILE=true

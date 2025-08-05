@@ -37,4 +37,4 @@ USER trader
 
 
 # Default command
-CMD ["python", "main.py"]
+CMD ["python", "main.py", "--auto-trading"]
