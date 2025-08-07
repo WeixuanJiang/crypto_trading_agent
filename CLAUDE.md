@@ -85,6 +85,7 @@ bandit -r src/
    - Handles API connections to KuCoin
    - Manages the trading cycle and execution
    - Provides a Flask API interface for monitoring and control
+   - Manages consolidated logging system for both backend and frontend
 
 2. **Strategy System (`src/strategy/`)**
    - `base.py`: Abstract base classes for trading strategies
@@ -135,6 +136,15 @@ The application uses a hierarchical configuration system:
 1. Default configuration in `src/core/config.py`
 2. Environment variables (loaded from `.env` file)
 3. Settings file (`config/settings.json`)
+
+## Logging System
+
+### Consolidated Logging
+
+- All logs (backend and frontend) are consolidated into a single file: `logs/trading_agent.log`
+- Backend Python logs and frontend Node/React logs are combined in this file
+- The web UI displays consolidated logs in the PERFORMANCE tab via the `/api/logs` endpoint
+- Log files are managed by the `start-services.sh` script which redirects all output to the consolidated log file
 
 Important environment variables:
 - `KUCOIN_API_KEY`, `KUCOIN_API_SECRET`, `KUCOIN_API_PASSPHRASE`: API credentials

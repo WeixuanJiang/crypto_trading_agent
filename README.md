@@ -48,6 +48,7 @@ A sophisticated headless cryptocurrency trading agent that combines Large Langua
 - **Performance Metrics**: Win rate, profit factor, best/worst trades, and risk metrics
 - **Persistent Storage**: Trade data saved to JSON files for historical analysis
 - **Comprehensive Reports**: Detailed performance reports with trading statistics
+- **Consolidated Logging**: Backend and frontend logs combined in a single file for easy monitoring
 
 ## 🐳 Docker Deployment
 
@@ -539,6 +540,8 @@ The agent provides comprehensive logging:
 - Risk management decisions
 - Portfolio performance metrics
 - Error handling and debugging information
+- Consolidated logs from backend and frontend in a single `trading_agent.log` file
+- Real-time log display in the UI via the `/api/logs` endpoint
 
 ## Testing & Validation
 
