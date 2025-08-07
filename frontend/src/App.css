@@ -1,0 +1,30 @@
+.App {
+  text-align: center;
+}
+
+.crypto-gain {
+  color: #4caf50;
+}
+
+.crypto-loss {
+  color: #f44336;
+}
+
+.trading-control-card {
+  transition: all 0.3s ease;
+}
+
+.trading-control-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.app-logo {
+  height: 40px;
+  margin-right: 15px;
+}
+
+.chart-container {
+  height: 300px;
+  margin-bottom: 20px;
+}

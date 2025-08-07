@@ -2,10 +2,11 @@ import os
 import sys
 import time
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import threading
 
@@ -129,13 +130,14 @@ class CryptoTradingAgent:
                 if attempt == max_retries - 1:
                     raise e
                 
-                # Check if it's a timeout error
-                if "timeout" in str(e).lower() or "connection" in str(e).lower():
+                # Check if it's a timeout error or API signature error
+                if ("timeout" in str(e).lower() or "connection" in str(e).lower() or 
+                    "invalid kc-api" in str(e).lower()):
                     wait_time = retry_delay * (backoff_factor ** attempt)
-                    logger.warning(f"⚠️ API timeout (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time:.1f}s...")
+                    logger.warning(f"⚠️ API error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time:.1f}s...")
                     time.sleep(wait_time)
                 else:
-                    # For non-timeout errors, re-raise immediately
+                    # For other errors, re-raise immediately
                     raise e
         
         return None
@@ -164,10 +166,47 @@ class CryptoTradingAgent:
             
             def emit(self, record):
                 try:
+                    # Extract the main message without timestamps if it's already formatted
+                    message = record.getMessage()
+                    
+                    # Clean up message - remove timestamp and color codes if present
+                    if " - [" in message and "]" in message:
+                        # It's a web access log, make it cleaner
+                        if "GET" in message or "POST" in message:
+                            if "api/logs" in message:
+                                # Skip log API calls to avoid cluttering the logs
+                                return
+                            # Simplify HTTP request logs
+                            parts = message.split('"', 2)
+                            if len(parts) > 1:
+                                message = parts[1]
+                        else:
+                            # Extract the actual message content after color codes
+                            parts = message.split("[0m - ", 1)
+                            if len(parts) > 1:
+                                message = parts[1]
+                    
+                    # Look for trading-specific log patterns to prioritize
+                    is_trading_log = False
+                    if any(pattern in message for pattern in [
+                        "Analysis Results", "Strategy Recommendation", "Portfolio", "P&L",
+                        "Trade executed", "Current Position", "📈", "💰", "🚀", "💼",
+                        "BUY", "SELL", "HOLD", "Confidence"
+                    ]):
+                        is_trading_log = True
+                        # Keep emojis and make trading logs more visible
+                        pass
+                    
+                    # Strip ANSI color codes that might remain
+                    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+                    message = ansi_escape.sub('', message)
+                    
+                    # Create log entry with emoji icons preserved
                     log_entry = {
                         'timestamp': datetime.fromtimestamp(record.created).strftime('%H:%M:%S'),
                         'level': record.levelname,
-                        'message': self.format(record)
+                        'message': message,
+                        'type': 'trading' if is_trading_log else 'system'
                     }
                     
                     # Add to memory (newest first)
@@ -183,14 +222,238 @@ class CryptoTradingAgent:
         # Create and add memory handler to root logger
         memory_handler = MemoryLogHandler(self.log_memory, self.max_log_entries)
         memory_handler.setLevel(logging.INFO)
+        memory_handler.setFormatter(logging.Formatter('%(message)s'))
         
         # Get the root logger and add our handler
         root_logger = logging.getLogger()
         root_logger.addHandler(memory_handler)
+        
+    def _read_logs_from_file(self, limit: int = 100) -> List[Dict]:
+        """Read logs from the consolidated log file
+        
+        Returns log entries in a format compatible with the memory log handler
+        """
+        log_file_path = 'logs/trading_agent.log'
+        logs = []
+        
+        try:
+            if not os.path.exists(log_file_path):
+                logger.warning(f"Log file not found: {log_file_path}")
+                return []
+                
+            with open(log_file_path, 'r') as f:
+                # Read the last N lines from the file (fastest approach for large files)
+                # Start with a buffer size that should be large enough for limit lines
+                buffer_size = limit * 200  # Estimate average line length
+                
+                # Get file size
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
+                
+                # Set initial position
+                pos = max(file_size - buffer_size, 0)
+                f.seek(pos)
+                
+                # If we're not at the beginning, discard partial line
+                if pos > 0:
+                    f.readline()
+                
+                # Read remaining lines
+                lines = f.readlines()
+                
+                # Get the last 'limit' lines or all if fewer
+                lines = lines[-limit:] if len(lines) > limit else lines
+                
+                for line in lines:
+                    # Parse and convert log line to dict entry
+                    log_entry = self._parse_log_line(line)
+                    if log_entry:
+                        logs.append(log_entry)
+                        
+            return logs
+        except Exception as e:
+            logger.error(f"Error reading log file: {e}")
+            return []
+    
+    def _parse_log_line(self, line: str) -> Dict:
+        """Parse a log line from the file into a structured log entry
+        
+        Handles both backend Python logs and frontend Node/React logs
+        """
+        try:
+            line = line.strip()
+            if not line:
+                return None
+                
+            # Default log entry structure
+            log_entry = {
+                'timestamp': '',
+                'level': 'INFO',
+                'message': line,  # Default to the whole line
+                'type': 'system'
+            }
+            
+            # Try to parse backend log format first (most common)
+            # Format: YYYY-MM-DD HH:MM:SS - module - LEVEL - function:line - message
+            backend_pattern = r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+-\s+([\w_\.]+)\s+-\s+(\w+)\s+-\s+([\w_\.]+:\d+)\s+-\s+(.+)$'
+            match = re.match(backend_pattern, line)
+            
+            if match:
+                timestamp_str, module, level, location, message = match.groups()
+                # Convert to display timestamp (just HH:MM:SS)
+                try:
+                    dt = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                    timestamp = dt.strftime('%H:%M:%S')
+                except:
+                    timestamp = timestamp_str.split(' ')[-1]  # Just take time part
+                    
+                log_entry = {
+                    'timestamp': timestamp,
+                    'level': level,
+                    'message': message,
+                    'type': 'system'
+                }
+                
+                # Check if it's a trading log
+                if any(pattern in message for pattern in [
+                    "Analysis Results", "Strategy Recommendation", "Portfolio", "P&L",
+                    "Trade executed", "Current Position", "📈", "💰", "🚀", "💼",
+                    "BUY", "SELL", "HOLD", "Confidence"
+                ]):
+                    log_entry['type'] = 'trading'
+                
+                return log_entry
+                
+            # Check for frontend logs from React/Node
+            # These often have a pattern with timestamps and components
+            frontend_patterns = [
+                # Match standard webpack output
+                r'\[(\d{2}:\d{2}:\d{2})\]\s+(\w+)\s+(.*)',
+                # Match npm start output 
+                r'(\d{2}:\d{2}:\d{2})\s+((?:(?:error|warn|info)\s+)?.*?):\s+(.*)',
+            ]
+            
+            for pattern in frontend_patterns:
+                match = re.match(pattern, line)
+                if match:
+                    parts = match.groups()
+                    
+                    timestamp = parts[0]
+                    level_or_component = parts[1].upper()
+                    message = parts[2]
+                    
+                    # Determine log level
+                    level = 'INFO'
+                    if 'ERROR' in level_or_component:
+                        level = 'ERROR'
+                    elif 'WARN' in level_or_component:
+                        level = 'WARNING'
+                    
+                    log_entry = {
+                        'timestamp': timestamp,
+                        'level': level, 
+                        'message': message,
+                        'type': 'system'
+                    }
+                    
+                    return log_entry
+            
+            # Fall back to generic parsing if specific patterns don't match
+            # Look for common timestamp patterns
+            timestamp_patterns = [
+                # Match HH:MM:SS format
+                r'(\d{1,2}:\d{2}:\d{2})',
+                # Match [HH:MM:SS] format
+                r'\[(\d{1,2}:\d{2}:\d{2})\]',
+            ]
+            
+            for pattern in timestamp_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    log_entry['timestamp'] = match.group(1)
+                    # Remove timestamp from message to avoid duplication
+                    log_entry['message'] = re.sub(pattern, '', line).strip()
+                    break
+            
+            # Look for log levels
+            level_matches = re.search(r'\b(ERROR|WARNING|INFO|DEBUG)\b', line, re.IGNORECASE)
+            if level_matches:
+                log_entry['level'] = level_matches.group(1).upper()
+            
+            # Check for duplicate content in message
+            # Sometimes there are duplicated words or repeated content
+            words = log_entry['message'].split()
+            if len(words) >= 2:
+                # Look for duplicated content at the end
+                half_len = len(words) // 2
+                if words[:half_len] == words[half_len:2*half_len]:
+                    log_entry['message'] = ' '.join(words[:half_len])
+            
+            return log_entry
+            
+        except Exception as e:
+            # If parsing fails, return a simple entry with the original line
+            return {
+                'timestamp': datetime.now().strftime('%H:%M:%S'),
+                'level': 'INFO',
+                'message': line,
+                'type': 'system'
+            }
     
     def get_recent_logs(self, limit: int = 50) -> List[Dict]:
-        """Get recent logs from memory"""
-        return self.log_memory[:limit]
+        """Get recent logs from memory and/or file
+        
+        Reads both in-memory logs and logs from the consolidated log file
+        """
+        # Start with in-memory logs
+        memory_logs = self.log_memory.copy()
+        
+        # Also read logs from the log file
+        try:
+            file_logs = self._read_logs_from_file(limit=limit*2)  # Read more than needed as we'll filter later
+            
+            # Merge logs, avoiding duplicates
+            # Use a set of log message+timestamps to track duplicates
+            seen = set()
+            filtered_memory_logs = []
+            
+            # First filter out duplicate messages from memory logs
+            for log in memory_logs:
+                # Normalize message by removing ANSI color codes and common prefixes
+                msg = log.get('message', '')
+                msg = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', msg)
+                msg = re.sub(r'^- INFO - ', '', msg)
+                
+                # Skip logs with duplicate message-timestamp pairs
+                log_key = (log.get('timestamp', ''), msg)
+                if log_key not in seen:
+                    log['message'] = msg  # Use cleaned message
+                    filtered_memory_logs.append(log)
+                    seen.add(log_key)
+            
+            # Replace memory logs with filtered version
+            memory_logs = filtered_memory_logs
+            
+            # Add file logs that aren't already in memory
+            for log in file_logs:
+                msg = log.get('message', '')
+                msg = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', msg)
+                msg = re.sub(r'^- INFO - ', '', msg)
+                
+                log_key = (log.get('timestamp', ''), msg)
+                if log_key not in seen:
+                    log['message'] = msg  # Use cleaned message
+                    memory_logs.append(log)
+                    seen.add(log_key)
+            
+            # Sort logs by timestamp (newest first)
+            memory_logs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            
+        except Exception as e:
+            logger.warning(f"Failed to read logs from file: {e}")
+        
+        # Return limited logs
+        return memory_logs[:limit]
     
     def get_account_balance(self) -> float:
         """Get USDT account balance with retry mechanism"""
@@ -238,7 +501,15 @@ class CryptoTradingAgent:
     def setup_flask_server(self, host='127.0.0.1', port=5001):
         """Setup Flask server with API endpoints"""
         self.app = Flask(__name__)
-        CORS(self.app)
+        # Enable CORS for React frontend
+        CORS(self.app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
+        
+        # Force JSON content type for all responses
+        @self.app.after_request
+        def add_header(response):
+            response.headers['Content-Type'] = 'application/json'
+            return response
+        
         
         @self.app.route('/', methods=['GET'])
         def index():
@@ -297,7 +568,10 @@ class CryptoTradingAgent:
                     self.auto_trading_enabled = False
                 
                 if not self.is_running:
-                    self.start_automated_trading()
+                    # Start trading in a separate thread so it doesn't block the response
+                    trading_thread = threading.Thread(target=self.start_trading, daemon=True)
+                    trading_thread.start()
+                    self.is_running = True
                 
                 logger.info(f"Trading started - Paper: {paper_trading}")
                 return jsonify({
@@ -383,7 +657,12 @@ class CryptoTradingAgent:
         def run_analysis():
             """Run analysis cycle"""
             try:
-                data = request.get_json() or {}
+                # Handle both JSON and form data
+                if request.is_json:
+                    data = request.get_json() or {}
+                else:
+                    data = request.form.to_dict() or {}
+                    
                 symbol = data.get('symbol')
                 
                 if symbol:
@@ -396,10 +675,11 @@ class CryptoTradingAgent:
                     })
                 else:
                     # Run full analysis cycle
-                    self.run_analysis_cycle()
+                    analysis_results = self.run_analysis_cycle()
                     return jsonify({
                         'success': True,
-                        'message': 'Analysis cycle completed'
+                        'message': 'Analysis cycle completed',
+                        'analysis': analysis_results
                     })
             except Exception as e:
                 logger.error(f"Error running analysis: {e}")
@@ -508,29 +788,60 @@ class CryptoTradingAgent:
                 logger.error(f"Error getting market price for {symbol}: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
-        @self.app.route('/api/logs', methods=['GET'])
+        @self.app.route('/api/logs', methods=['GET', 'POST'])
         def get_logs():
-            """Get recent trading logs"""
+            """Get or add recent trading logs"""
             try:
-                # Get query parameters
-                limit = int(request.args.get('limit', 50))
-                
-                # Get logs from memory handler
-                logs = self.get_recent_logs(limit)
-                
-                return jsonify({
-                    'success': True,
-                    'logs': logs,
-                    'total_count': len(logs),
-                    'timestamp': datetime.now().isoformat()
-                })
+                if request.method == 'GET':
+                    # Get query parameters
+                    limit = int(request.args.get('limit', 50))
+                    
+                    # Get logs from memory handler
+                    logs = self.get_recent_logs(limit)
+                    
+                    return jsonify({
+                        'success': True,
+                        'logs': logs,
+                        'total_count': len(logs),
+                        'timestamp': datetime.now().isoformat()
+                    })
+                elif request.method == 'POST':
+                    # Add a new log entry directly to the memory handler
+                    data = request.get_json()
+                    if not data:
+                        return jsonify({'success': False, 'error': 'No data provided'}), 400
+                    
+                    message = data.get('message', '')
+                    level = data.get('level', 'INFO')
+                    log_type = data.get('type', 'trading')
+                    
+                    # Create log entry
+                    log_entry = {
+                        'timestamp': datetime.now().strftime('%H:%M:%S'),
+                        'level': level,
+                        'message': message,
+                        'type': log_type
+                    }
+                    
+                    # Add to memory
+                    self.log_memory.insert(0, log_entry)
+                    
+                    # Keep only max_entries
+                    if len(self.log_memory) > self.max_log_entries:
+                        self.log_memory.pop()
+                    
+                    return jsonify({
+                        'success': True,
+                        'message': 'Log entry added successfully',
+                        'timestamp': datetime.now().isoformat()
+                    })
             except Exception as e:
                 logger.error(f"Error getting logs: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
-        self.server_host = host
-        self.server_port = port
-        logger.info(f"Flask server configured on {host}:{port}")
+        
+        
+        
     
     def start_flask_server(self):
         """Start Flask server in a separate thread"""
@@ -540,8 +851,8 @@ class CryptoTradingAgent:
         
         def run_server():
             self.server_running = True
-            logger.info(f"🌐 Starting Flask API server on http://{self.server_host}:{self.server_port}")
-            self.app.run(host=self.server_host, port=self.server_port, debug=False, threaded=True)
+            logger.info(f"🌐 Starting Flask API server on http://127.0.0.1:5001")
+            self.app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
         
         self.server_thread = threading.Thread(target=run_server, daemon=True)
         self.server_thread.start()
@@ -997,9 +1308,9 @@ class CryptoTradingAgent:
         
         return analysis_results
     
-    def start_trading(self, interval_minutes: int):
+    def start_trading(self, interval_minutes: int = None):
         """Start the trading bot with specified interval"""
-        if interval_minutes is not None:
+        if interval_minutes is None:
             interval_minutes = self.trading_interval_minutes
         
         logger.info(f"Starting trading bot with {interval_minutes} minute intervals...")

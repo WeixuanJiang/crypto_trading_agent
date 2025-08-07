@@ -31,7 +31,11 @@ trading_data/
 *.json
 *.xlsx
 *.csv
+*.db
 
+data/
+*.db
+s
 # Logs
 *.log
 logs/
