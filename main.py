@@ -473,9 +473,7 @@ class CryptoTradingAgent:
     def _update_portfolio_data(self):
         """Update portfolio balances and positions"""
         try:
-            logger.info("📊 Updating portfolio data...")
-            
-            # Update balances
+            # Update balances silently without logging
             self.portfolio_manager.update_balances()
             
             # Get current prices for all trading pairs
@@ -485,15 +483,14 @@ class CryptoTradingAgent:
                     ticker = self.market_client.get_24hr_stats(symbol)
                     current_prices[symbol] = float(ticker['last'])
                 except Exception as e:
-                    logger.warning(f"⚠️ Could not get price for {symbol}: {e}")
+                    # Reduce log verbosity for routine price fetching
+                    pass
             
             # Update positions with current prices
             self.portfolio_manager.update_positions(current_prices)
             
             # Save cache
             self.portfolio_manager.save_portfolio_cache()
-            
-            logger.info("✅ Portfolio data updated successfully")
             
         except Exception as e:
             logger.error(f"❌ Error updating portfolio data: {e}")
