@@ -1,5 +1,5 @@
-# Use Python 3.13 slim image as base
-FROM python:3.13-slim
+# Use Python 3.11 slim image (3.13 has compatibility issues with pandas)
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
@@ -13,13 +13,15 @@ ENV DOCKER_CONTAINER=true
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade pip and install Python dependencies
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -33,8 +35,6 @@ RUN chmod +x main.py
 # Create non-root user for security
 RUN useradd -m -u 1000 trader && chown -R trader:trader /app
 USER trader
-
-
 
 # Default command
 CMD ["python", "main.py", "--auto-trading"]
