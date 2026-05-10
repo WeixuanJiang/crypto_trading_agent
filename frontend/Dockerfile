@@ -2,6 +2,9 @@ FROM node:18-alpine
 
 WORKDIR /app
 
+# Accept build argument for API URL
+ARG REACT_APP_API_URL=http://localhost:5001
+
 # Copy package.json and package-lock.json
 COPY package*.json ./
 
@@ -14,6 +17,7 @@ COPY . .
 # Set environment variables
 ENV PORT=8501
 ENV NODE_ENV=production
+ENV REACT_APP_API_URL=$REACT_APP_API_URL
 
 # Build the app
 RUN npm run build

@@ -1,318 +1,195 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Box,
-  Typography,
-  Paper,
-  Grid,
-  TextField,
-  Button,
-  Slider,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  FormControlLabel,
-  Switch,
-  Alert,
-  CircularProgress,
-  Chip,
-  Card,
-  CardContent,
-  CardHeader,
-  Divider,
-  IconButton,
-  Tooltip,
-  InputAdornment
-} from '@mui/material';
-import {
-  Save as SaveIcon,
-  Refresh as RefreshIcon,
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Info as InfoIcon
-} from '@mui/icons-material';
-
+import React, { useState } from 'react';
+import { Box, CircularProgress } from '@mui/material';
 import { tradingService } from '../services/apiService';
+import { T } from '../theme/terminal';
+
+function PanelHeader({ children, right }) {
+  return (
+    <Box sx={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      px: '14px', py: '8px', borderBottom: `1px solid ${T.border}`,
+      fontSize: '10px', color: T.dim, letterSpacing: '.1em', textTransform: 'uppercase',
+      fontFamily: T.font, background: T.status, flexShrink: 0,
+    }}>
+      <span>{children}</span>
+      {right && <span>{right}</span>}
+    </Box>
+  );
+}
+
+function Field({ label, description, children }) {
+  return (
+    <Box sx={{ mb: '16px' }}>
+      <Box sx={{ fontSize: '10px', color: T.dim, textTransform: 'uppercase', letterSpacing: '.08em', mb: '4px', fontFamily: T.font }}>
+        {label}
+      </Box>
+      {children}
+      {description && (
+        <Box sx={{ fontSize: '10px', color: T.vdim, mt: '4px', fontFamily: T.font }}>{description}</Box>
+      )}
+    </Box>
+  );
+}
+
+function TermInput({ value, onChange, type = 'text', placeholder, masked }) {
+  const [show, setShow] = useState(false);
+  return (
+    <Box sx={{ display: 'flex', gap: '0' }}>
+      <Box
+        component="input"
+        type={masked && !show ? 'password' : type}
+        value={value ?? ''}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder || (masked ? '••••••••••••••••' : '')}
+        sx={{
+          flex: 1, background: T.status, border: `1px solid ${T.border}`,
+          borderRight: masked ? 'none' : `1px solid ${T.border}`,
+          color: T.text1, fontFamily: T.font, fontSize: '12px',
+          px: '10px', py: '8px', outline: 'none',
+          '&:focus': { borderColor: T.green },
+          '&::placeholder': { color: T.vdim },
+        }}
+      />
+      {masked && (
+        <Box
+          component="button"
+          onClick={() => setShow(s => !s)}
+          sx={{
+            px: '10px', background: T.panel, border: `1px solid ${T.border}`,
+            color: T.dim, cursor: 'pointer', fontSize: '11px', fontFamily: T.font,
+            '&:hover': { color: T.text2 },
+          }}
+        >
+          {show ? '🙈' : '👁'}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function TermBtn({ children, onClick, disabled, variant = 'default', loading }) {
+  const styles = {
+    save:    { bg: '#001a12', border: T.green,  color: T.green },
+    default: { bg: 'transparent', border: T.border, color: T.text2 },
+  };
+  const s = styles[variant] || styles.default;
+  return (
+    <Box
+      component="button"
+      onClick={disabled ? undefined : onClick}
+      sx={{
+        display: 'inline-flex', alignItems: 'center', gap: '6px',
+        px: '16px', py: '8px', fontFamily: T.font, fontSize: '11px', fontWeight: 700,
+        letterSpacing: '.08em', textTransform: 'uppercase',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        background: s.bg, border: `1px solid ${disabled ? T.border : s.border}`,
+        color: disabled ? T.vdim : s.color, opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      {loading && <CircularProgress size={10} sx={{ color: 'inherit' }} />}
+      {children}
+    </Box>
+  );
+}
+
+function InfoBox({ children, variant = 'info' }) {
+  const color = { info: T.blue, warn: T.yellow, error: T.red }[variant] || T.blue;
+  return (
+    <Box sx={{
+      p: '10px', mb: '20px', border: `1px solid ${color}44`,
+      background: `${color}0a`, fontSize: '11px', color, fontFamily: T.font,
+    }}>
+      {children}
+    </Box>
+  );
+}
 
 export default function Settings() {
   const [settings, setSettings] = useState({
-    trading_pairs: [],
-    min_confidence_threshold: 0.7,
-    max_daily_trades: 5,
-    trading_interval_minutes: 60
+    kucoin_api_key: '',
+    kucoin_api_secret: '',
+    kucoin_api_passphrase: '',
+    openai_api_key: '',
   });
-  
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
-  const [newPair, setNewPair] = useState('');
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const fetchSettings = async () => {
-    try {
-      setLoading(true);
-      const response = await tradingService.getStatus();
-      
-      if (response.data && response.data.success) {
-        const { status } = response.data;
-        setSettings({
-          trading_pairs: status.trading_pairs || [],
-          min_confidence_threshold: status.min_confidence_threshold || 0.7,
-          max_daily_trades: status.max_daily_trades || 5,
-          trading_interval_minutes: status.trading_interval_minutes || 60
-        });
-        setError(null);
-      } else {
-        throw new Error('Invalid response from server');
-      }
-    } catch (err) {
-      console.error('Failed to fetch settings:', err);
-      setError('Failed to load settings. Please check your connection to the backend server.');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const set = field => value => setSettings(s => ({ ...s, [field]: value }));
 
   const handleSave = async () => {
     try {
       setSaving(true);
-      const response = await tradingService.updateSettings(settings);
-      
-      if (response.data && response.data.success) {
-        setSuccess('Settings saved successfully!');
+      const res = await tradingService.updateSettings(settings);
+      if (res.data?.success) {
+        setSuccess('Credentials saved');
         setError(null);
-        
-        // Update settings with values from the server
-        setSettings(response.data.settings);
-        
-        // Clear success message after 3 seconds
-        setTimeout(() => {
-          setSuccess(null);
-        }, 3000);
+        if (res.data.settings) setSettings(res.data.settings);
+        setTimeout(() => setSuccess(null), 3000);
       } else {
-        throw new Error('Failed to save settings');
+        throw new Error('Save failed');
       }
     } catch (err) {
-      console.error('Failed to save settings:', err);
-      setError(`Failed to save settings: ${err.message || 'Unknown error'}`);
-      
-      // Clear error message after 5 seconds
-      setTimeout(() => {
-        setError(null);
-      }, 5000);
-    } finally {
-      setSaving(false);
-    }
+      setError(err.message || 'Failed to save');
+      setSuccess(null);
+    } finally { setSaving(false); }
   };
-
-  const handleChange = (field) => (event) => {
-    setSettings({
-      ...settings,
-      [field]: event.target.value
-    });
-  };
-
-  const handleSliderChange = (field) => (event, newValue) => {
-    setSettings({
-      ...settings,
-      [field]: newValue
-    });
-  };
-
-  const handleAddPair = () => {
-    if (newPair && !settings.trading_pairs.includes(newPair)) {
-      setSettings({
-        ...settings,
-        trading_pairs: [...settings.trading_pairs, newPair]
-      });
-      setNewPair('');
-    }
-  };
-
-  const handleDeletePair = (pair) => {
-    setSettings({
-      ...settings,
-      trading_pairs: settings.trading_pairs.filter(p => p !== pair)
-    });
-  };
-
-  if (loading) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" height="80vh">
-        <CircularProgress />
-      </Box>
-    );
-  }
 
   return (
-    <>
-      <Box mb={3} display="flex" justifyContent="space-between" alignItems="center">
-        <Typography variant="h5">
-          Trading Settings
-        </Typography>
-        <Button
-          variant="outlined"
-          startIcon={<RefreshIcon />}
-          onClick={fetchSettings}
-          disabled={loading}
-        >
-          Refresh
-        </Button>
-      </Box>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', fontFamily: T.font, overflow: 'hidden' }}>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
+      <PanelHeader
+        right={
+          <TermBtn variant="save" onClick={handleSave} disabled={saving} loading={saving}>
+            ✓ Save Credentials
+          </TermBtn>
+        }
+      >
+        Account &amp; API Keys
+      </PanelHeader>
 
-      {success && (
-        <Alert severity="success" sx={{ mb: 3 }}>
-          {success}
-        </Alert>
-      )}
+      <Box sx={{ flex: 1, overflow: 'auto', p: '24px', maxWidth: '700px' }}>
 
-      <Grid container spacing={3}>
-        {/* Trading Pairs Section */}
-        <Grid item xs={12} md={6}>
-          <Card sx={{ height: '100%', boxShadow: 3 }}>
-            <CardHeader 
-              title="Trading Pairs" 
-              subheader="Configure the trading pairs to monitor"
-            />
-            <CardContent>
-              <Box mb={3}>
-                <TextField
-                  label="New Trading Pair"
-                  value={newPair}
-                  onChange={(e) => setNewPair(e.target.value)}
-                  placeholder="e.g., BTC-USDT"
-                  fullWidth
-                  size="small"
-                  InputProps={{
-                    endAdornment: (
-                      <InputAdornment position="end">
-                        <IconButton 
-                          onClick={handleAddPair}
-                          disabled={!newPair}
-                          size="small"
-                        >
-                          <AddIcon />
-                        </IconButton>
-                      </InputAdornment>
-                    ),
-                  }}
-                />
-              </Box>
+        {error   && <InfoBox variant="error">{error}</InfoBox>}
+        {success && <InfoBox variant="info">✓ {success}</InfoBox>}
 
-              <Box 
-                sx={{ 
-                  display: 'flex', 
-                  flexWrap: 'wrap', 
-                  gap: 1,
-                  minHeight: '100px'
-                }}
-              >
-                {settings.trading_pairs.map((pair) => (
-                  <Chip
-                    key={pair}
-                    label={pair}
-                    onDelete={() => handleDeletePair(pair)}
-                    color="primary"
-                    variant="outlined"
-                  />
-                ))}
-                
-                {settings.trading_pairs.length === 0 && (
-                  <Typography variant="body2" color="text.secondary">
-                    No trading pairs configured
-                  </Typography>
-                )}
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
+        <InfoBox variant="warn">
+          ⚠ API keys are stored locally. Never share them. KuCoin keys only need trade + withdrawal permissions for live trading, or read-only for paper trading.
+        </InfoBox>
 
-        {/* Trading Parameters Section */}
-        <Grid item xs={12} md={6}>
-          <Card sx={{ height: '100%', boxShadow: 3 }}>
-            <CardHeader 
-              title="Trading Parameters" 
-              subheader="Configure trading behavior"
-            />
-            <CardContent>
-              <Grid container spacing={3}>
-                <Grid item xs={12}>
-                  <Typography gutterBottom>
-                    Minimum Confidence Threshold ({Math.round(settings.min_confidence_threshold * 100)}%)
-                  </Typography>
-                  <Box display="flex" alignItems="center">
-                    <Slider
-                      value={settings.min_confidence_threshold}
-                      onChange={handleSliderChange('min_confidence_threshold')}
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      sx={{ flexGrow: 1, mr: 2 }}
-                    />
-                    <Tooltip title="Minimum confidence required to execute a trade">
-                      <IconButton size="small">
-                        <InfoIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </Box>
-                </Grid>
-                
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Max Daily Trades"
-                    type="number"
-                    value={settings.max_daily_trades}
-                    onChange={handleChange('max_daily_trades')}
-                    fullWidth
-                    InputProps={{
-                      inputProps: { min: 1, max: 100 }
-                    }}
-                  />
-                </Grid>
-                
-                <Grid item xs={12} sm={6}>
-                  <TextField
-                    label="Trading Interval (minutes)"
-                    type="number"
-                    value={settings.trading_interval_minutes}
-                    onChange={handleChange('trading_interval_minutes')}
-                    fullWidth
-                    InputProps={{
-                      inputProps: { min: 5, max: 1440 }
-                    }}
-                  />
-                </Grid>
-              </Grid>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Save Button */}
-        <Grid item xs={12}>
-          <Box display="flex" justifyContent="flex-end" mt={2}>
-            <Button
-              variant="contained"
-              color="primary"
-              startIcon={saving ? <CircularProgress size={20} /> : <SaveIcon />}
-              onClick={handleSave}
-              disabled={saving}
-              size="large"
-            >
-              Save Settings
-            </Button>
+        {/* KuCoin */}
+        <Box sx={{ mb: '28px' }}>
+          <Box sx={{ fontSize: '11px', fontWeight: 700, color: T.text2, letterSpacing: '.08em', textTransform: 'uppercase', mb: '16px', pb: '8px', borderBottom: `1px solid ${T.border}` }}>
+            KuCoin API
           </Box>
-        </Grid>
-      </Grid>
-    </>
+          <Field label="API Key" description="Your KuCoin API key from the API Management page">
+            <TermInput value={settings.kucoin_api_key} onChange={set('kucoin_api_key')} masked />
+          </Field>
+          <Field label="API Secret">
+            <TermInput value={settings.kucoin_api_secret} onChange={set('kucoin_api_secret')} masked />
+          </Field>
+          <Field label="Passphrase" description="The passphrase you set when creating the API key">
+            <TermInput value={settings.kucoin_api_passphrase} onChange={set('kucoin_api_passphrase')} masked />
+          </Field>
+        </Box>
+
+        {/* OpenAI */}
+        <Box sx={{ mb: '28px' }}>
+          <Box sx={{ fontSize: '11px', fontWeight: 700, color: T.text2, letterSpacing: '.08em', textTransform: 'uppercase', mb: '16px', pb: '8px', borderBottom: `1px solid ${T.border}` }}>
+            OpenAI API
+          </Box>
+          <Field label="OpenAI API Key" description="Required when LLM_PROVIDER=openai in Trading Settings">
+            <TermInput value={settings.openai_api_key} onChange={set('openai_api_key')} masked />
+          </Field>
+        </Box>
+
+        {/* Info */}
+        <Box sx={{ fontSize: '11px', color: T.vdim, lineHeight: 1.8 }}>
+          <div>• AWS Bedrock credentials are managed via IAM roles / environment variables</div>
+          <div>• Keys are used only for KuCoin API calls and LLM analysis</div>
+          <div>• Leave fields blank to continue using environment variable defaults</div>
+        </Box>
+      </Box>
+    </Box>
   );
 }

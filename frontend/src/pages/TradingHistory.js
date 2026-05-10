@@ -151,6 +151,23 @@ export default function TradingHistory() {
             <Box display="flex" justifyContent="center" py={5}>
               <CircularProgress />
             </Box>
+          ) : trades.length === 0 ? (
+            <Box
+              display="flex"
+              flexDirection="column"
+              alignItems="center"
+              justifyContent="center"
+              py={8}
+            >
+              <HistoryIcon sx={{ fontSize: 64, color: 'text.disabled', mb: 2 }} />
+              <Typography variant="h6" color="text.secondary" gutterBottom>
+                No Trading History Yet
+              </Typography>
+              <Typography variant="body2" color="text.secondary" textAlign="center" sx={{ maxWidth: 400 }}>
+                Your trading history will appear here once you start trading.
+                Execute your first trade to see performance metrics and trade details.
+              </Typography>
+            </Box>
           ) : (
             <Box>
               {tabIndex === 0 && (

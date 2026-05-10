@@ -17,7 +17,11 @@ import {
   Paper,
   Grid,
   Chip,
-  Avatar
+  Avatar,
+  List,
+  ListItem,
+  ListItemText,
+  IconButton
 } from '@mui/material';
 import {
   PlayArrow as PlayIcon,
@@ -31,6 +35,7 @@ import {
   Favorite as SentimentPositiveIcon,
   SentimentNeutral as SentimentNeutralIcon,
   SentimentVeryDissatisfied as SentimentNegativeIcon,
+  Refresh as RefreshIcon
 } from '@mui/icons-material';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, BarElement } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
@@ -224,6 +229,9 @@ export default function TradeControls({ status, onAction }) {
   const [success, setSuccess] = useState(null);
   const [analysisResults, setAnalysisResults] = useState(null);
   const [isPaperTrading, setIsPaperTrading] = useState(!status?.auto_trading);
+  const [logs, setLogs] = useState([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [filterMode, setFilterMode] = useState('all');
 
   // Update isPaperTrading when status changes
   useEffect(() => {
@@ -231,6 +239,47 @@ export default function TradeControls({ status, onAction }) {
       setIsPaperTrading(!status.auto_trading);
     }
   }, [status]);
+
+  // Fetch logs
+  const fetchLogs = async () => {
+    try {
+      setLogsLoading(true);
+      const response = await tradingService.getLogs(30);
+      if (response.data && response.data.success) {
+        setLogs(response.data.logs || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch logs:', err);
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  // Fetch logs on mount and set up interval
+  useEffect(() => {
+    fetchLogs();
+    const interval = setInterval(fetchLogs, 15000); // Refresh every 15 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  const getLevelColor = (level) => {
+    switch (level?.toUpperCase()) {
+      case 'ERROR':
+        return 'error.main';
+      case 'WARNING':
+        return 'warning.main';
+      case 'INFO':
+        return 'info.main';
+      case 'DEBUG':
+        return 'text.secondary';
+      default:
+        return 'text.primary';
+    }
+  };
+
+  const getTradingLogsCount = () => {
+    return logs.filter(log => log.type === 'trading').length;
+  };
 
   const handleTradingModeToggle = () => {
     setIsPaperTrading(!isPaperTrading);
@@ -552,7 +601,99 @@ export default function TradeControls({ status, onAction }) {
       </CardContent>
       
       <Divider />
-      
+
+        {/* Real-Time Logs Section */}
+        <Box mt={3} px={2}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1}>
+            <Typography variant="subtitle2" fontWeight={600}>
+              Real-Time Logs
+            </Typography>
+            <Box display="flex" alignItems="center">
+              <Button
+                size="small"
+                onClick={() => setFilterMode('all')}
+                color={filterMode === 'all' ? 'primary' : 'inherit'}
+                sx={{ mr: 1, minWidth: 'auto', px: 1, fontSize: '0.75rem' }}
+              >
+                All
+              </Button>
+              <Button
+                size="small"
+                onClick={() => setFilterMode('trading')}
+                color={filterMode === 'trading' ? 'primary' : 'inherit'}
+                sx={{ mr: 1, minWidth: 'auto', px: 1, fontSize: '0.75rem' }}
+                endIcon={
+                  <Box
+                    component="span"
+                    sx={{
+                      bgcolor: 'primary.main',
+                      color: 'white',
+                      borderRadius: '50%',
+                      width: 16,
+                      height: 16,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '0.65rem',
+                      ml: 0.5
+                    }}
+                  >
+                    {getTradingLogsCount()}
+                  </Box>
+                }
+              >
+                Trade
+              </Button>
+              <IconButton onClick={fetchLogs} size="small" disabled={logsLoading}>
+                {logsLoading ? <CircularProgress size={16} /> : <RefreshIcon fontSize="small" />}
+              </IconButton>
+            </Box>
+          </Box>
+
+          <Box sx={{
+            overflow: 'auto',
+            maxHeight: '200px',
+            bgcolor: 'background.default',
+            borderRadius: 1,
+            border: '1px solid',
+            borderColor: 'divider'
+          }}>
+            {logs.length > 0 ? (
+              <List dense disablePadding>
+                {logs
+                  .filter(log => filterMode === 'all' || log.type === 'trading')
+                  .slice(0, 10)
+                  .map((log, index) => (
+                  <React.Fragment key={index}>
+                    {index > 0 && <Divider variant="middle" component="li" />}
+                    <ListItem alignItems="flex-start" sx={{ py: 0.5, px: 1 }}>
+                      <ListItemText
+                        primaryTypographyProps={{
+                          variant: 'caption',
+                          color: getLevelColor(log.level),
+                          sx: { fontSize: '0.75rem' }
+                        }}
+                        secondaryTypographyProps={{
+                          variant: 'caption',
+                          sx: { fontSize: '0.7rem' }
+                        }}
+                        primary={log.message}
+                        secondary={log.timestamp}
+                      />
+                    </ListItem>
+                  </React.Fragment>
+                ))}
+              </List>
+            ) : (
+              <Box display="flex" justifyContent="center" alignItems="center" py={2}>
+                <Typography variant="caption" color="text.secondary">
+                  No logs available
+                </Typography>
+              </Box>
+            )}
+          </Box>
+        </Box>
+
       <CardActions sx={{ padding: 2, justifyContent: 'center', mt: 'auto' }}>
         <Box display="flex" flexWrap="wrap" gap={1} width="100%" justifyContent="space-around">
           <Button

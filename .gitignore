@@ -29,11 +29,13 @@ MANIFEST
 # Trading data (sensitive)
 trading_data/
 *.json
+!config/settings.json.template
 *.xlsx
 *.csv
 *.db
 
 data/
+runtime_data/
 *.db
 s
 # Logs

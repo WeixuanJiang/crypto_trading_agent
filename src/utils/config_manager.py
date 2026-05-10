@@ -111,10 +111,18 @@ class ConfigManager:
         self.trading.trading_interval_minutes = int(os.getenv('TRADING_INTERVAL_MINUTES', self.trading.default_interval_minutes))
         self.trading.min_account_balance = float(os.getenv('MINIMUM_BALANCE', self.trading.min_account_balance))
         
-        # Risk config
-        self.risk.max_position_size_percent = float(os.getenv('MAX_POSITION_SIZE', self.risk.max_position_size_percent)) * 100
-        self.risk.max_portfolio_exposure_percent = float(os.getenv('MAX_PORTFOLIO_RISK', self.risk.max_portfolio_exposure_percent)) * 100
-        self.risk.default_stop_loss_percent = float(os.getenv('STOP_LOSS_PERCENTAGE', self.risk.default_stop_loss_percent)) * 100
+        # Risk config - multiply by 100 only if loading from env (decimal format), not if using default (already percentage)
+        max_pos_size = float(os.getenv('MAX_POSITION_SIZE', '0'))
+        if max_pos_size > 0:
+            self.risk.max_position_size_percent = max_pos_size * 100
+
+        max_portfolio_risk = float(os.getenv('MAX_PORTFOLIO_RISK', '0'))
+        if max_portfolio_risk > 0:
+            self.risk.max_portfolio_exposure_percent = max_portfolio_risk * 100
+
+        stop_loss_pct = float(os.getenv('STOP_LOSS_PERCENTAGE', '0'))
+        if stop_loss_pct > 0:
+            self.risk.default_stop_loss_percent = stop_loss_pct * 100
         self.risk.risk_reward_ratio = float(os.getenv('RISK_REWARD_RATIO', self.risk.risk_reward_ratio))
         self.risk.atr_multiplier = float(os.getenv('ATR_MULTIPLIER', self.risk.atr_multiplier))
         
@@ -164,13 +172,15 @@ class ConfigManager:
         """Validate configuration values"""
         errors = []
         
-        # Validate API credentials
-        if not self.api.kucoin_api_key:
-            errors.append("KUCOIN_API_KEY is required")
-        if not self.api.kucoin_api_secret:
-            errors.append("KUCOIN_API_SECRET is required")
-        if not self.api.kucoin_api_passphrase:
-            errors.append("KUCOIN_API_PASSPHRASE is required")
+        # Validate API credentials - only required when not in paper trading mode
+        enable_live_trading = os.getenv('ENABLE_LIVE_TRADING', 'false').lower() == 'true'
+        if enable_live_trading:
+            if not self.api.kucoin_api_key:
+                errors.append("KUCOIN_API_KEY is required for live trading")
+            if not self.api.kucoin_api_secret:
+                errors.append("KUCOIN_API_SECRET is required for live trading")
+            if not self.api.kucoin_api_passphrase:
+                errors.append("KUCOIN_API_PASSPHRASE is required for live trading")
         
         # Validate trading config
         if self.trading.min_confidence_threshold < 0 or self.trading.min_confidence_threshold > 1:

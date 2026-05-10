@@ -22,21 +22,46 @@ from src.core.logger import get_logger
 logger = get_logger(__name__)
 
 class CryptoTradingAgent:
+    @staticmethod
+    def _load_settings_from_file():
+        """Load all settings from config/settings.json centrally"""
+        config_path = os.path.join(os.getcwd(), 'config', 'settings.json')
+
+        if not os.path.exists(config_path):
+            logger.warning(f"⚠️ Settings file not found at {config_path}, will use defaults")
+            return None
+
+        try:
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"❌ Error loading settings file: {e}")
+            return None
+
     def __init__(self, auto_trading_enabled=False, fast_mode=None):
         # Load environment variables from .env file
         load_dotenv()
-        
-        # Read fast_mode from environment if not explicitly provided
+
+        # Load settings from config file centrally
+        saved_settings = self._load_settings_from_file()
+
+        # Read fast_mode from settings file, then environment if not explicitly provided
         if fast_mode is None:
-            fast_mode = os.getenv('FAST_MODE', 'true').lower() == 'true'
-        
+            if saved_settings and 'llm_configuration' in saved_settings:
+                fast_mode = str(saved_settings['llm_configuration'].get('FAST_MODE', 'true')).lower() == 'true'
+            else:
+                fast_mode = os.getenv('FAST_MODE', 'true').lower() == 'true'
+
         logger.info("Initializing Crypto Trading Agent...")
         
         # Initialize API credentials
         self.api_key, self.api_secret, self.api_passphrase = self.get_api_credentials()
         self.aws_region = os.getenv('AWS_REGION', 'us-east-1')
         self.cross_region_inference = os.getenv('AWS_CROSS_REGION_INFERENCE', 'true').lower() == 'true'
-        
+
+        # Sync local clock with KuCoin server time to avoid KC-API-TIMESTAMP errors
+        self._sync_kucoin_timestamp()
+
         # Initialize KuCoin client for production environment
         self.client = Client(
             api_key=self.api_key,
@@ -61,10 +86,21 @@ class CryptoTradingAgent:
         self.market_data = MarketDataManager(self.market_client)
         self.risk_manager = RiskManager()
         self.trade_tracker = create_trade_tracker()
-        
+
+        # Load paper trading balances from settings
+        paper_trading_balances = self._load_paper_trading_balances()
+
         # Initialize portfolio manager
         from src.portfolio.manager import PortfolioManager
-        self.portfolio_manager = PortfolioManager(self.user_client, self.market_client, self.trade_tracker, config, self.db_manager, self.position_repository)
+        self.portfolio_manager = PortfolioManager(
+            self.user_client,
+            self.market_client,
+            self.trade_tracker,
+            config,
+            self.db_manager,
+            self.position_repository,
+            paper_trading_balances=paper_trading_balances
+        )
         
         # Initialize trading strategy with AWS Bedrock
         self.fast_mode = fast_mode
@@ -82,25 +118,77 @@ class CryptoTradingAgent:
             self.strategy = None
             logger.warning(f"⚠ AWS Bedrock initialization failed: {e}. Using simple technical analysis only.")
         
-        # Trading parameters from environment variables
-        trading_pairs_str = os.getenv('TRADING_PAIRS', 'BTC-USDT,ETH-USDT,ADA-USDT,DOT-USDT')
+        # Load trading pairs from settings file
+        if saved_settings and 'trading_parameters' in saved_settings:
+            trading_pairs_str = saved_settings['trading_parameters'].get('TRADING_PAIRS', 'BTC-USDT,ETH-USDT')
+            logger.info(f"✅ Trading pairs loaded from settings: {trading_pairs_str}")
+        else:
+            trading_pairs_str = os.getenv('TRADING_PAIRS', 'BTC-USDT,ETH-USDT,ADA-USDT,DOT-USDT')
+            logger.warning(f"⚠️ Trading pairs from environment fallback: {trading_pairs_str}")
+
         self.trading_pairs = [pair.strip() for pair in trading_pairs_str.split(',')]
         self.is_running = False
-        self.auto_trading_enabled = auto_trading_enabled
+
+        # Check ENABLE_LIVE_TRADING from settings if not set via command-line
+        if not auto_trading_enabled:
+            if saved_settings and 'trading_parameters' in saved_settings:
+                trading_params = saved_settings['trading_parameters']
+                enable_live_str = str(trading_params.get('ENABLE_LIVE_TRADING', 'false')).lower()
+                enable_live_trading = enable_live_str in ['true', '1', 'yes']
+                logger.info(f"✅ Live trading setting loaded from settings: {enable_live_trading}")
+            else:
+                # Fallback to environment variable
+                enable_live_trading = os.getenv('ENABLE_LIVE_TRADING', 'false').lower() == 'true'
+                logger.warning(f"⚠️ Live trading from environment fallback: {enable_live_trading}")
+
+            self.auto_trading_enabled = enable_live_trading
+        else:
+            self.auto_trading_enabled = auto_trading_enabled
+
         self.trade_history = []  # Keep for backward compatibility
-        
-        # Safety settings from environment variables
-        self.min_confidence_threshold = float(os.getenv('MIN_CONFIDENCE_THRESHOLD', '0.7'))
-        self.max_daily_trades = int(os.getenv('MAX_DAILY_TRADES', '5'))
+
+        # Load other trading parameters from settings file
+        if saved_settings and 'trading_parameters' in saved_settings:
+            trading_params = saved_settings['trading_parameters']
+
+            # Load all trading parameters from settings file
+            self.min_confidence_threshold = float(trading_params.get('MIN_CONFIDENCE_THRESHOLD', '0.7'))
+            self.max_daily_trades = int(trading_params.get('MAX_DAILY_TRADES', '1000'))
+            self.minimum_balance = float(trading_params.get('MINIMUM_BALANCE', '10'))
+            self.trading_interval_minutes = int(trading_params.get('TRADING_INTERVAL_MINUTES', '15'))
+            self.historical_data_limit = int(trading_params.get('HISTORICAL_DATA_LIMIT', '500'))
+
+            logger.info(f"✅ Trading parameters loaded from settings:")
+            logger.info(f"   - Trading interval: {self.trading_interval_minutes} minutes")
+            logger.info(f"   - Min confidence: {self.min_confidence_threshold}")
+            logger.info(f"   - Max daily trades: {self.max_daily_trades}")
+            logger.info(f"   - Min balance: ${self.minimum_balance}")
+        else:
+            # Fallback to environment variables only if settings file doesn't exist
+            self.min_confidence_threshold = float(os.getenv('MIN_CONFIDENCE_THRESHOLD', '0.7'))
+            self.max_daily_trades = int(os.getenv('MAX_DAILY_TRADES', '5'))
+            self.minimum_balance = float(os.getenv('MINIMUM_BALANCE', '10'))
+            self.trading_interval_minutes = int(os.getenv('TRADING_INTERVAL_MINUTES', '60'))
+            self.historical_data_limit = int(os.getenv('HISTORICAL_DATA_LIMIT', '500'))
+            logger.warning(f"⚠️ Using environment variables for trading parameters (settings file not found)")
+
+        # Load LLM / sentiment settings
+        _llm_cfg = (saved_settings or {}).get('llm_configuration', {})
+        self.llm_provider = str(_llm_cfg.get('LLM_PROVIDER', os.getenv('LLM_PROVIDER', 'bedrock'))).lower()
+        self.enable_sentiment_analysis = str(_llm_cfg.get('ENABLE_SENTIMENT_ANALYSIS',
+                                             os.getenv('ENABLE_SENTIMENT_ANALYSIS', 'true'))).lower() in ('true', '1', 'yes')
+
         self.daily_trade_count = 0
         self.last_trade_date = None
-        self.minimum_balance = float(os.getenv('MINIMUM_BALANCE', '10'))
-        self.trading_interval_minutes = int(os.getenv('TRADING_INTERVAL_MINUTES', '60'))
-        
+
+        # Balance cache — avoids hammering KuCoin's authenticated accounts endpoint
+        self._balance_cache = {'value': 0.0, 'ts': 0.0}
+        self._balance_cache_ttl = 30  # seconds
+
         # Log current mode
-        mode = "AUTO TRADING" if auto_trading_enabled else "PAPER TRADING"
+        mode = "LIVE TRADING" if self.auto_trading_enabled else "PAPER TRADING"
         speed_mode = "FAST" if fast_mode else "FULL"
-        logger.info(f"🚀 Agent initialized in {mode} mode ({speed_mode} analysis)")
+        logger.info(f"Agent initialized in {mode} mode ({speed_mode} analysis)")
         
         # Flask server setup
         self.app = None
@@ -143,17 +231,87 @@ class CryptoTradingAgent:
         return None
 
     def get_api_credentials(self):
-        """Get API credentials from environment variables"""
-        api_key = os.getenv('KUCOIN_API_KEY')
-        api_secret = os.getenv('KUCOIN_API_SECRET')
-        api_passphrase = os.getenv('KUCOIN_API_PASSPHRASE')
-        
+        """Get API credentials from env vars, falling back to settings.json"""
+        api_key        = os.getenv('KUCOIN_API_KEY', '')
+        api_secret     = os.getenv('KUCOIN_API_SECRET', '')
+        api_passphrase = os.getenv('KUCOIN_API_PASSPHRASE', '')
+
+        # Fall back to settings.json when env vars are absent
         if not all([api_key, api_secret, api_passphrase]):
-            logger.error("Please set KUCOIN_API_KEY, KUCOIN_API_SECRET, and KUCOIN_API_PASSPHRASE environment variables.")
+            cfg = self._load_settings_from_file() or {}
+            creds = cfg.get('api_credentials', {})
+            api_key        = api_key        or creds.get('kucoin_api_key', '')
+            api_secret     = api_secret     or creds.get('kucoin_api_secret', '')
+            api_passphrase = api_passphrase or creds.get('kucoin_api_passphrase', '')
+            if all([api_key, api_secret, api_passphrase]):
+                logger.info("✅ KuCoin credentials loaded from settings.json")
+
+        # Determine live-trading flag (settings.json takes precedence over env)
+        cfg = self._load_settings_from_file() or {}
+        tp = cfg.get('trading_parameters', {})
+        enable_live_trading = str(tp.get('ENABLE_LIVE_TRADING', os.getenv('ENABLE_LIVE_TRADING', 'false'))).lower() == 'true'
+
+        if enable_live_trading and not all([api_key, api_secret, api_passphrase]):
+            logger.error("KuCoin credentials required for live trading but not found in env or settings.json")
             sys.exit(1)
-        
+
+        if not all([api_key, api_secret, api_passphrase]):
+            logger.warning("⚠️  Running in PAPER TRADING mode - API credentials not configured")
+
         return api_key, api_secret, api_passphrase
-    
+
+    def _sync_kucoin_timestamp(self):
+        """Install a self-updating time proxy in kucoin.base_client.
+
+        The proxy recalculates the clock offset every 60 s in a background
+        thread so it stays accurate even when Windows NTP corrects the system
+        clock after startup.
+        """
+        import requests as _req
+        import kucoin.base_client as _kbc
+        import time as _real_time
+        import threading as _threading
+
+        def _fetch_offset():
+            try:
+                resp = _req.get('https://api.kucoin.com/api/v1/timestamp', timeout=5)
+                server_ms = resp.json().get('data', 0)
+                local_ms  = int(_real_time.time() * 1000)
+                return (server_ms - local_ms) / 1000.0
+            except Exception:
+                return None
+
+        # Get initial offset
+        offset_s = _fetch_offset()
+        if offset_s is None:
+            logger.warning("Could not fetch KuCoin server time — timestamp proxy not applied")
+            return
+
+        # Shared mutable state for the proxy
+        state = {'offset': offset_s}
+
+        class _LiveTimeProxy:
+            """Wraps the time module; .time() returns clock-corrected time."""
+            def time(self):
+                return _real_time.time() + state['offset']
+            def __getattr__(self, n):
+                return getattr(_real_time, n)
+
+        _kbc.time = _LiveTimeProxy()
+        logger.info(f"KuCoin clock offset {offset_s:+.2f}s — live timestamp proxy installed")
+
+        # Background thread: refreshes offset every 60 s
+        def _refresh_loop():
+            while True:
+                _real_time.sleep(60)
+                new_off = _fetch_offset()
+                if new_off is not None:
+                    state['offset'] = new_off
+                    logger.debug(f"KuCoin timestamp proxy offset updated: {new_off:+.2f}s")
+
+        t = _threading.Thread(target=_refresh_loop, daemon=True, name="kucoin-ts-sync")
+        t.start()
+
     def _setup_memory_log_handler(self):
         """Setup memory log handler to capture logs for real-time display"""
         import logging
@@ -455,56 +613,256 @@ class CryptoTradingAgent:
         # Return limited logs
         return memory_logs[:limit]
     
-    def get_account_balance(self) -> float:
-        """Get USDT account balance with retry mechanism"""
+    def get_account_balance(self, force_refresh: bool = False) -> float:
+        """Get USDT account balance. Caches the result for _balance_cache_ttl seconds
+        to avoid hammering KuCoin's authenticated endpoint on every status poll."""
         try:
+            # Paper trading: use portfolio manager's in-memory balances
+            if not self.auto_trading_enabled:
+                self.portfolio_manager.update_balances()
+                balances = self.portfolio_manager.balances
+                if balances and 'USDT' in balances:
+                    return balances['USDT'].get('total', 0.0)
+                return self.portfolio_manager.paper_trading_balances.get('USDT', 10000.0)
+
+            # Live trading: return cached value if still fresh
+            now = time.time()
+            if not force_refresh and (now - self._balance_cache['ts']) < self._balance_cache_ttl:
+                return self._balance_cache['value']
+
             def _get_balance():
                 accounts = self.user_client.get_accounts()
                 for account in accounts:
                     if account['currency'] == 'USDT' and account['type'] == 'trade':
                         return float(account['balance'])
                 return 0.0
-            
-            return self.retry_api_call(_get_balance)
+
+            balance = self.retry_api_call(_get_balance)
+            if balance is not None:
+                self._balance_cache = {'value': balance, 'ts': now}
+                return balance
+            return self._balance_cache['value']  # stale but better than 0
+
         except Exception as e:
-            logger.error(f"❌ Error getting account balance after retries: {e}")
-            return 0.0
+            logger.error(f"Error getting account balance: {e}")
+            return self._balance_cache.get('value', 0.0)
     
-    def _update_portfolio_data(self):
-        """Update portfolio balances and positions"""
+    def _update_portfolio_data(self, force: bool = False):
+        """Update portfolio balances and positions (throttled to once per 30 s)."""
+        now = time.time()
+        if not force and hasattr(self, '_last_portfolio_update'):
+            if now - self._last_portfolio_update < 30:
+                return
+        self._last_portfolio_update = now
         try:
-            # Update balances silently without logging
             self.portfolio_manager.update_balances()
-            
-            # Get current prices for all trading pairs
             current_prices = {}
             for symbol in self.trading_pairs:
                 try:
                     ticker = self.market_client.get_24hr_stats(symbol)
                     current_prices[symbol] = float(ticker['last'])
-                except Exception as e:
-                    # Reduce log verbosity for routine price fetching
+                except Exception:
                     pass
-            
-            # Update positions with current prices
             self.portfolio_manager.update_positions(current_prices)
-            
-            # Save cache
             self.portfolio_manager.save_portfolio_cache()
-            
         except Exception as e:
-            logger.error(f"❌ Error updating portfolio data: {e}")
-    
+            logger.error(f"Error updating portfolio data: {e}")
+
+    def _load_paper_trading_balances(self):
+        """Load paper trading initial balances from settings"""
+        try:
+            settings = self._load_settings_from_json()
+            paper_trading = settings.get('paper_trading', {})
+
+            return {
+                'USDT': float(paper_trading.get('PAPER_TRADING_INITIAL_BALANCE', 10000)),
+                'BTC': float(paper_trading.get('PAPER_TRADING_INITIAL_BTC', 0)),
+                'ETH': float(paper_trading.get('PAPER_TRADING_INITIAL_ETH', 0))
+            }
+        except Exception as e:
+            logger.warning(f"Could not load paper trading balances: {e}. Using defaults.")
+            return {'USDT': 10000.0, 'BTC': 0.0, 'ETH': 0.0}
+
+    def _load_settings_from_json(self):
+        """Load settings from JSON config file"""
+        import os
+        import json
+
+        config_path = os.path.join(os.getcwd(), 'config', 'settings.json')
+
+        if not os.path.exists(config_path):
+            logger.warning(f"Settings file not found: {config_path}")
+            return {}
+
+        try:
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading settings: {e}")
+            return {}
+
+    def _save_settings_to_json(self, settings: Dict):
+        """Save settings to JSON config file"""
+        import os
+        import json
+
+        config_dir = os.path.join(os.getcwd(), 'config')
+        config_path = os.path.join(config_dir, 'settings.json')
+
+        # Create config directory if it doesn't exist
+        os.makedirs(config_dir, exist_ok=True)
+
+        try:
+            with open(config_path, 'w') as f:
+                json.dump(settings, f, indent=2)
+            logger.info("Settings saved successfully")
+        except Exception as e:
+            logger.error(f"Error saving settings: {e}")
+            raise
+
+    def _get_setting_value(self, settings: Dict, key: str, default: str = ""):
+        """Get setting value from nested JSON structure"""
+        # Check all sections for the key
+        for section in settings.values():
+            if isinstance(section, dict) and key in section:
+                return section[key]
+        return default
+
+    def _reload_trading_pairs(self):
+        """Reload trading pairs from saved settings or environment variables"""
+        try:
+            # Try to load from settings file first
+            settings = self._load_settings_from_json()
+            trading_params = settings.get('trading_parameters', {})
+            trading_pairs_str = trading_params.get('TRADING_PAIRS', '')
+
+            # Fallback to environment variable if not in settings
+            if not trading_pairs_str:
+                trading_pairs_str = os.getenv('TRADING_PAIRS', 'BTC-USDT,ETH-USDT,ADA-USDT,DOT-USDT')
+
+            # Parse and update trading pairs
+            new_pairs = [pair.strip() for pair in trading_pairs_str.split(',') if pair.strip()]
+
+            if new_pairs:
+                old_pairs = self.trading_pairs.copy()
+                self.trading_pairs = new_pairs
+                logger.info(f"✓ Trading pairs reloaded: {', '.join(self.trading_pairs)}")
+
+                # Log if pairs changed
+                if set(old_pairs) != set(new_pairs):
+                    logger.info(f"📊 Trading pairs updated from {len(old_pairs)} to {len(new_pairs)} pairs")
+            else:
+                logger.warning("⚠ No valid trading pairs found, keeping existing pairs")
+
+        except Exception as e:
+            logger.error(f"❌ Error reloading trading pairs: {e}")
+
+    def _check_kucoin_configured(self) -> bool:
+        """Check if KuCoin API credentials are configured"""
+        settings = self._load_settings_from_json()
+        api_creds = settings.get('api_credentials', {})
+
+        api_key = api_creds.get('kucoin_api_key', '')
+        api_secret = api_creds.get('kucoin_api_secret', '')
+        api_passphrase = api_creds.get('kucoin_api_passphrase', '')
+
+        return bool(api_key and api_secret and api_passphrase)
+
+    def _serialize_trade_for_api(self, trade) -> Dict:
+        """Normalize trade tracker records into the shape used by the React UI."""
+        if isinstance(trade, dict):
+            data = trade
+        else:
+            data = {
+                'id': getattr(trade, 'id', ''),
+                'timestamp': getattr(trade, 'timestamp', ''),
+                'symbol': getattr(trade, 'symbol', ''),
+                'side': getattr(trade, 'action', ''),
+                'action': getattr(trade, 'action', ''),
+                'amount': getattr(trade, 'size', 0),
+                'quantity': getattr(trade, 'size', 0),
+                'price': getattr(trade, 'price', 0),
+                'value': getattr(trade, 'value', 0),
+                'confidence': getattr(trade, 'confidence', 0),
+                'order_id': getattr(trade, 'order_id', None),
+                'status': 'closed' if getattr(trade, 'is_closed', False) else 'open',
+                'fees': getattr(trade, 'fees', 0),
+                'pnl': getattr(trade, 'pnl', 0) or 0,
+                'pnl_percent': getattr(trade, 'pnl_percent', 0) or 0,
+                'strategy': 'hybrid',
+                'stop_loss': getattr(trade, 'stop_loss', None),
+                'take_profit': getattr(trade, 'take_profit', None),
+                'exit_timestamp': getattr(trade, 'exit_timestamp', None),
+                'exit_price': getattr(trade, 'exit_price', None),
+                'exit_reason': getattr(trade, 'exit_reason', None),
+                'is_closed': getattr(trade, 'is_closed', False),
+            }
+
+        symbol = data.get('symbol') or data.get('pair') or ''
+        side = data.get('side') or data.get('action') or ''
+        quantity = data.get('quantity', data.get('amount', data.get('size', 0)))
+        is_closed = bool(data.get('is_closed')) or data.get('status') == 'closed'
+
+        return {
+            'id': data.get('id', ''),
+            'timestamp': data.get('timestamp', ''),
+            'symbol': symbol,
+            'pair': symbol,
+            'side': side,
+            'action': side,
+            'amount': quantity,
+            'quantity': quantity,
+            'price': data.get('price', 0),
+            'value': data.get('value', 0),
+            'confidence': data.get('confidence', 0),
+            'order_id': data.get('order_id'),
+            'status': 'closed' if is_closed else data.get('status', 'open'),
+            'fees': data.get('fees', 0),
+            'pnl': data.get('pnl', 0) or 0,
+            'pnl_percent': data.get('pnl_percent', 0) or 0,
+            'strategy': data.get('strategy', 'hybrid'),
+            'stop_loss': data.get('stop_loss'),
+            'take_profit': data.get('take_profit'),
+            'exit_timestamp': data.get('exit_timestamp'),
+            'exit_price': data.get('exit_price'),
+            'exit_reason': data.get('exit_reason'),
+            'is_closed': is_closed,
+        }
+
+    def _get_api_trades(self, symbol: Optional[str] = None) -> List[Dict]:
+        """Return normalized trade records for API consumers."""
+        if not hasattr(self, 'trade_tracker'):
+            return []
+
+        if hasattr(self.trade_tracker, 'get_all_trades'):
+            raw_trades = self.trade_tracker.get_all_trades().values()
+        else:
+            raw_trades = getattr(self.trade_tracker, 'trades', [])
+
+        trades = [self._serialize_trade_for_api(trade) for trade in raw_trades]
+        if symbol:
+            trades = [trade for trade in trades if trade.get('symbol') == symbol]
+        return trades
+
     def setup_flask_server(self, host='127.0.0.1', port=5001):
         """Setup Flask server with API endpoints"""
         self.app = Flask(__name__)
         # Enable CORS for React frontend
-        CORS(self.app, resources={r"/*": {"origins": "*"}}, supports_credentials=False)
-        
-        # Force JSON content type for all responses
+        CORS(self.app,
+             resources={r"/*": {
+                 "origins": "*",
+                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                 "allow_headers": ["Content-Type", "Authorization"]
+             }})
+
+        # Add CORS and JSON headers to all responses
         @self.app.after_request
-        def add_header(response):
-            response.headers['Content-Type'] = 'application/json'
+        def add_headers(response):
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            if request.path.startswith('/api/'):
+                response.headers['Content-Type'] = 'application/json'
             return response
         
         
@@ -553,23 +911,34 @@ class CryptoTradingAgent:
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/trading/start', methods=['POST'])
-        def start_trading():
+        def start_trading_api():
             """Start automated trading"""
             try:
-                data = request.get_json() or {}
-                paper_trading = data.get('paper_trading', True)
-                
+                # Try to get JSON data, but don't fail if it's not JSON
+                try:
+                    data = request.get_json(force=True, silent=True) or {}
+                except:
+                    data = {}
+
+                # If paper_trading not provided, check ENABLE_LIVE_TRADING from settings
+                # Otherwise use the provided paper_trading parameter
+                if 'paper_trading' in data:
+                    paper_trading = data.get('paper_trading', True)
+                else:
+                    # Check current auto_trading_enabled status (which reflects ENABLE_LIVE_TRADING)
+                    paper_trading = not self.auto_trading_enabled
+
                 if not paper_trading:
                     self.enable_auto_trading()
                 else:
                     self.auto_trading_enabled = False
-                
+
                 if not self.is_running:
                     # Start trading in a separate thread so it doesn't block the response
                     trading_thread = threading.Thread(target=self.start_trading, daemon=True)
                     trading_thread.start()
                     self.is_running = True
-                
+
                 logger.info(f"Trading started - Paper: {paper_trading}")
                 return jsonify({
                     'success': True,
@@ -578,7 +947,7 @@ class CryptoTradingAgent:
                     'is_running': self.is_running
                 })
             except Exception as e:
-                logger.error(f"Error starting trading: {e}")
+                logger.error(f"Error starting trading: {e}", exc_info=True)
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/trading/stop', methods=['POST'])
@@ -688,23 +1057,74 @@ class CryptoTradingAgent:
             try:
                 self._update_portfolio_data()
                 portfolio_data = self.portfolio_manager.get_portfolio_summary()
+
+                # Use real live balance; fall back to portfolio_manager's USDT cache
                 balance = self.get_account_balance()
-                
-                # Convert positions dict to list format for better API compatibility
+                if balance == 0.0:
+                    balance = self.portfolio_manager.balances.get('USDT', {}).get('total', 0.0)
+
+                # Compute real total portfolio value: live USDT + crypto position values
+                crypto_value = portfolio_data.get('total_crypto_value', 0)
+                total_value  = balance + crypto_value
+
+                # Positions list
                 positions_dict = portfolio_data.get('positions', {})
                 positions_list = []
                 for symbol, position_data in positions_dict.items():
                     position_info = position_data.copy()
                     position_info['symbol'] = symbol
                     positions_list.append(position_info)
-                
+
+                # P&L and win-rate from trade tracker
+                metrics = {}
+                try:
+                    metrics = self.trade_tracker.get_performance_summary() if hasattr(self, 'trade_tracker') else {}
+                except Exception:
+                    pass
+
+                # All non-zero currency holdings with estimated USDT value
+                holdings = []
+                raw_balances = self.portfolio_manager.balances or {}
+                # Fetch prices for trading pairs + any held currencies
+                current_prices = {}
+                symbols_needed = set(self.trading_pairs)
+                for cur in raw_balances:
+                    if cur != 'USDT':
+                        symbols_needed.add(f'{cur}-USDT')
+                for sym in symbols_needed:
+                    try:
+                        t = self.market_client.get_ticker(sym)
+                        current_prices[sym] = float(t.get('price', 0))
+                    except Exception:
+                        pass
+                for currency, info in raw_balances.items():
+                    total = info.get('total', 0.0) if isinstance(info, dict) else float(info)
+                    if total <= 0:
+                        continue
+                    if currency == 'USDT':
+                        usdt_value = total
+                    else:
+                        price = current_prices.get(f'{currency}-USDT', 0)
+                        usdt_value = total * price if price else None
+                    holdings.append({
+                        'currency': currency,
+                        'amount': total,
+                        'available': info.get('available', total) if isinstance(info, dict) else total,
+                        'usdt_value': usdt_value,
+                    })
+                holdings.sort(key=lambda h: (h['usdt_value'] or 0), reverse=True)
+
                 return jsonify({
                     'success': True,
                     'portfolio': {
                         'balance': balance,
+                        'holdings': holdings,
                         'positions': positions_list,
-                        'total_value': portfolio_data.get('total_portfolio_value', 0),
+                        'total_value':    total_value,
                         'unrealized_pnl': portfolio_data.get('total_unrealized_pnl', 0),
+                        'total_pnl':  metrics.get('total_pnl', 0),
+                        'win_rate':   metrics.get('win_rate', 0),
+                        'total_trades': metrics.get('total_trades', 0),
                         'last_update': datetime.now().isoformat()
                     }
                 })
@@ -712,39 +1132,465 @@ class CryptoTradingAgent:
                 logger.error(f"Error getting portfolio: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
+        @self.app.route('/api/settings', methods=['GET'])
+        def get_settings():
+            """Get current trading settings"""
+            try:
+                saved_settings = self._load_settings_from_json()
+
+                # Defaults
+                defaults = {
+                    'trading_parameters': {
+                        'TRADING_PAIRS': 'BTC-USDT,ETH-USDT',
+                        'TRADING_INTERVAL_MINUTES': '15',
+                        'MAX_DAILY_TRADES': '1000',
+                        'MIN_CONFIDENCE_THRESHOLD': '0.7',
+                        'MINIMUM_BALANCE': '10',
+                        'ENABLE_LIVE_TRADING': 'false',
+                        'HISTORICAL_DATA_LIMIT': '500'
+                    },
+                    'risk_management': {
+                        'MAX_PORTFOLIO_RISK': '0.02',
+                        'MAX_POSITION_SIZE': '0.1',
+                        'MAX_PORTFOLIO_EXPOSURE': '0.20',
+                        'MAX_OPEN_POSITIONS': '5',
+                        'STOP_LOSS_PERCENTAGE': '0.05',
+                        'RISK_REWARD_RATIO': '2.0',
+                        'USE_TRAILING_STOP': 'false',
+                        'TRAILING_STOP_PERCENT': '0.03'
+                    },
+                    'technical_indicators': {
+                        'RSI_PERIOD': '14',
+                        'RSI_OVERBOUGHT': '70',
+                        'RSI_OVERSOLD': '30',
+                        'MACD_FAST': '12',
+                        'MACD_SLOW': '26',
+                        'MACD_SIGNAL': '9',
+                        'BB_PERIOD': '20',
+                        'BB_STD_DEV': '2'
+                    },
+                    'llm_configuration': {
+                        'FAST_MODE': 'true',
+                        'LLM_PROVIDER': 'openai',
+                        'LLM_MODEL_NAME': 'gpt-4o-mini',
+                        'LLM_MAX_TOKENS': '1000',
+                        'LLM_TEMPERATURE': '0.3',
+                        'ENABLE_SENTIMENT_ANALYSIS': 'true'
+                    },
+                    'paper_trading': {
+                        'PAPER_TRADING_INITIAL_BALANCE': '10000',
+                        'PAPER_TRADING_INITIAL_BTC': '0',
+                        'PAPER_TRADING_INITIAL_ETH': '0'
+                    },
+                    'performance': {
+                        'PERFORMANCE_REPORT_DAYS': '30'
+                    },
+                    'notifications': {
+                        'ENABLE_NOTIFICATIONS': 'false',
+                        'NOTIFY_ON_TRADE': 'true',
+                        'NOTIFY_ON_ERROR': 'true'
+                    }
+                }
+
+                # Merge saved settings with defaults
+                for section, values in defaults.items():
+                    if section not in saved_settings:
+                        saved_settings[section] = {}
+                    for key, default_value in values.items():
+                        if key not in saved_settings[section]:
+                            saved_settings[section][key] = default_value
+
+                # Flatten for frontend
+                flat_settings = {}
+                for section in saved_settings.values():
+                    if isinstance(section, dict):
+                        flat_settings.update(section)
+
+                return jsonify({
+                    'success': True,
+                    'settings': flat_settings
+                })
+            except Exception as e:
+                logger.error(f"Error getting settings: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
         @self.app.route('/api/settings/update', methods=['POST'])
         def update_settings():
             """Update trading settings"""
             try:
                 data = request.get_json() or {}
-                
-                if 'trading_pairs' in data:
-                    self.trading_pairs = data['trading_pairs']
-                
-                if 'min_confidence_threshold' in data:
-                    self.min_confidence_threshold = float(data['min_confidence_threshold'])
-                
-                if 'max_daily_trades' in data:
-                    self.max_daily_trades = int(data['max_daily_trades'])
-                
-                if 'trading_interval_minutes' in data:
-                    self.trading_interval_minutes = int(data['trading_interval_minutes'])
-                
-                logger.info("Settings updated successfully")
+
+                # Load existing settings
+                saved_settings = self._load_settings_from_json()
+
+                # Categorize incoming data
+                api_credentials = {}
+                trading_parameters = {}
+                risk_management = {}
+                technical_indicators = {}
+                llm_configuration = {}
+                paper_trading = {}
+                performance = {}
+                notifications = {}
+
+                # Map fields to categories
+                for key, value in data.items():
+                    if key in ['kucoin_api_key', 'kucoin_api_secret', 'kucoin_api_passphrase', 'openai_api_key']:
+                        api_credentials[key] = value
+                    elif key in ['TRADING_PAIRS', 'TRADING_INTERVAL_MINUTES', 'MAX_DAILY_TRADES',
+                                'MIN_CONFIDENCE_THRESHOLD', 'MINIMUM_BALANCE', 'ENABLE_LIVE_TRADING',
+                                'HISTORICAL_DATA_LIMIT']:
+                        trading_parameters[key] = value
+                    elif key in ['MAX_PORTFOLIO_RISK', 'MAX_POSITION_SIZE', 'MAX_PORTFOLIO_EXPOSURE',
+                                'MAX_OPEN_POSITIONS', 'STOP_LOSS_PERCENTAGE', 'RISK_REWARD_RATIO',
+                                'USE_TRAILING_STOP', 'TRAILING_STOP_PERCENT']:
+                        risk_management[key] = value
+                    elif key in ['RSI_PERIOD', 'RSI_OVERBOUGHT', 'RSI_OVERSOLD', 'MACD_FAST',
+                                'MACD_SLOW', 'MACD_SIGNAL', 'BB_PERIOD', 'BB_STD_DEV']:
+                        technical_indicators[key] = value
+                    elif key in ['LLM_PROVIDER', 'LLM_MODEL_NAME', 'LLM_MAX_TOKENS',
+                                'LLM_TEMPERATURE', 'ENABLE_SENTIMENT_ANALYSIS', 'FAST_MODE']:
+                        llm_configuration[key] = value
+                    elif key in ['PAPER_TRADING_INITIAL_BALANCE', 'PAPER_TRADING_INITIAL_BTC',
+                                'PAPER_TRADING_INITIAL_ETH']:
+                        paper_trading[key] = value
+                    elif key in ['PERFORMANCE_REPORT_DAYS']:
+                        performance[key] = value
+                    elif key in ['ENABLE_NOTIFICATIONS', 'NOTIFY_ON_TRADE', 'NOTIFY_ON_ERROR']:
+                        notifications[key] = value
+
+                # Update settings structure
+                if api_credentials:
+                    if 'api_credentials' not in saved_settings:
+                        saved_settings['api_credentials'] = {}
+                    saved_settings['api_credentials'].update(api_credentials)
+
+                if trading_parameters:
+                    if 'trading_parameters' not in saved_settings:
+                        saved_settings['trading_parameters'] = {}
+                    saved_settings['trading_parameters'].update(trading_parameters)
+
+                if risk_management:
+                    if 'risk_management' not in saved_settings:
+                        saved_settings['risk_management'] = {}
+                    saved_settings['risk_management'].update(risk_management)
+
+                if technical_indicators:
+                    if 'technical_indicators' not in saved_settings:
+                        saved_settings['technical_indicators'] = {}
+                    saved_settings['technical_indicators'].update(technical_indicators)
+
+                if llm_configuration:
+                    if 'llm_configuration' not in saved_settings:
+                        saved_settings['llm_configuration'] = {}
+                    saved_settings['llm_configuration'].update(llm_configuration)
+
+                if paper_trading:
+                    if 'paper_trading' not in saved_settings:
+                        saved_settings['paper_trading'] = {}
+                    saved_settings['paper_trading'].update(paper_trading)
+
+                if performance:
+                    if 'performance' not in saved_settings:
+                        saved_settings['performance'] = {}
+                    saved_settings['performance'].update(performance)
+
+                if notifications:
+                    if 'notifications' not in saved_settings:
+                        saved_settings['notifications'] = {}
+                    saved_settings['notifications'].update(notifications)
+
+                # Save to JSON file
+                self._save_settings_to_json(saved_settings)
+
+                # Reload trading pairs if they were modified
+                if 'TRADING_PAIRS' in trading_parameters:
+                    self._reload_trading_pairs()
+
+                # Sync ENABLE_LIVE_TRADING with auto_trading_enabled
+                if 'ENABLE_LIVE_TRADING' in trading_parameters:
+                    enable_live = str(trading_parameters['ENABLE_LIVE_TRADING']).lower()
+                    if enable_live in ['true', '1', 'yes']:
+                        self.auto_trading_enabled = True
+                        logger.info("✅ Live Trading ENABLED via settings")
+                    else:
+                        self.auto_trading_enabled = False
+                        logger.info("📝 Paper Trading mode ENABLED via settings")
+
+                # Apply FAST_MODE immediately to the running agent
+                if 'FAST_MODE' in llm_configuration:
+                    new_fast_mode = str(llm_configuration['FAST_MODE']).lower() in ('true', '1', 'yes')
+                    self.fast_mode = new_fast_mode
+                    if hasattr(self, 'strategy') and self.strategy:
+                        self.strategy.enable_llm = not new_fast_mode
+                    mode_str = 'FAST (Technical Only)' if new_fast_mode else 'FULL (LLM+Technical)'
+                    logger.info(f"✅ Fast Mode updated to {mode_str}")
+
+                # Reload trading interval if modified
+                if 'TRADING_INTERVAL_MINUTES' in trading_parameters:
+                    self.trading_interval_minutes = int(trading_parameters['TRADING_INTERVAL_MINUTES'])
+                    logger.info(f"✅ Trading interval updated to {self.trading_interval_minutes} minutes")
+
+                # Reload other trading parameters if modified
+                if 'MIN_CONFIDENCE_THRESHOLD' in trading_parameters:
+                    self.min_confidence_threshold = float(trading_parameters['MIN_CONFIDENCE_THRESHOLD'])
+                    logger.info(f"✅ Confidence threshold updated to {self.min_confidence_threshold}")
+
+                if 'MAX_DAILY_TRADES' in trading_parameters:
+                    self.max_daily_trades = int(trading_parameters['MAX_DAILY_TRADES'])
+                    logger.info(f"✅ Max daily trades updated to {self.max_daily_trades}")
+
+                if 'MINIMUM_BALANCE' in trading_parameters:
+                    self.minimum_balance = float(trading_parameters['MINIMUM_BALANCE'])
+                    logger.info(f"✅ Minimum balance updated to ${self.minimum_balance}")
+
+                if 'HISTORICAL_DATA_LIMIT' in trading_parameters:
+                    self.historical_data_limit = int(trading_parameters['HISTORICAL_DATA_LIMIT'])
+                    logger.info(f"✅ Historical data limit updated to {self.historical_data_limit}")
+
+                # Apply risk management parameters immediately
+                if 'MAX_PORTFOLIO_RISK' in risk_management:
+                    self.risk_manager.max_portfolio_risk = float(risk_management['MAX_PORTFOLIO_RISK'])
+                    logger.info(f"✅ Max portfolio risk updated to {self.risk_manager.max_portfolio_risk:.2%}")
+
+                if 'MAX_POSITION_SIZE' in risk_management:
+                    self.risk_manager.max_position_size = float(risk_management['MAX_POSITION_SIZE'])
+                    logger.info(f"✅ Max position size updated to {self.risk_manager.max_position_size:.2%}")
+
+                if 'STOP_LOSS_PERCENTAGE' in risk_management:
+                    self.risk_manager.stop_loss_percentage = float(risk_management['STOP_LOSS_PERCENTAGE'])
+                    logger.info(f"✅ Stop loss updated to {self.risk_manager.stop_loss_percentage:.2%}")
+
+                if 'RISK_REWARD_RATIO' in risk_management:
+                    self.risk_manager.risk_reward_ratio = float(risk_management['RISK_REWARD_RATIO'])
+                    logger.info(f"✅ Risk/reward ratio updated to {self.risk_manager.risk_reward_ratio}")
+
+                if 'MAX_PORTFOLIO_EXPOSURE' in risk_management:
+                    self.risk_manager.max_portfolio_exposure = float(risk_management['MAX_PORTFOLIO_EXPOSURE'])
+                    logger.info(f"✅ Max portfolio exposure updated to {self.risk_manager.max_portfolio_exposure:.2%}")
+
+                if 'MAX_OPEN_POSITIONS' in risk_management:
+                    self.max_open_positions = int(risk_management['MAX_OPEN_POSITIONS'])
+                    logger.info(f"✅ Max open positions updated to {self.max_open_positions}")
+
+                if 'USE_TRAILING_STOP' in risk_management:
+                    self.risk_manager.use_trailing_stop = str(risk_management['USE_TRAILING_STOP']).lower() in ('true', '1', 'yes')
+                    logger.info(f"✅ Trailing stop {'enabled' if self.risk_manager.use_trailing_stop else 'disabled'}")
+
+                if 'TRAILING_STOP_PERCENT' in risk_management:
+                    self.risk_manager.trailing_stop_percent = float(risk_management['TRAILING_STOP_PERCENT'])
+                    logger.info(f"✅ Trailing stop % updated to {self.risk_manager.trailing_stop_percent:.2%}")
+
+                # Apply technical indicator parameters immediately (live on strategy object)
+                if self.strategy:
+                    if 'RSI_PERIOD' in technical_indicators:
+                        self.strategy.rsi_period = int(technical_indicators['RSI_PERIOD'])
+                        logger.info(f"✅ RSI period updated to {self.strategy.rsi_period}")
+
+                    if 'RSI_OVERBOUGHT' in technical_indicators:
+                        v = int(technical_indicators['RSI_OVERBOUGHT'])
+                        self.strategy.rsi_overbought_weak = v
+                        self.strategy.rsi_overbought_strong = min(v + 5, 100)
+                        logger.info(f"✅ RSI overbought updated to {v} (strong: {self.strategy.rsi_overbought_strong})")
+
+                    if 'RSI_OVERSOLD' in technical_indicators:
+                        v = int(technical_indicators['RSI_OVERSOLD'])
+                        self.strategy.rsi_oversold_weak = v
+                        self.strategy.rsi_oversold_strong = max(v - 5, 0)
+                        logger.info(f"✅ RSI oversold updated to {v} (strong: {self.strategy.rsi_oversold_strong})")
+
+                    if 'MACD_FAST' in technical_indicators:
+                        self.strategy.macd_fast = int(technical_indicators['MACD_FAST'])
+                        logger.info(f"✅ MACD fast period updated to {self.strategy.macd_fast}")
+
+                    if 'MACD_SLOW' in technical_indicators:
+                        self.strategy.macd_slow = int(technical_indicators['MACD_SLOW'])
+                        logger.info(f"✅ MACD slow period updated to {self.strategy.macd_slow}")
+
+                    if 'MACD_SIGNAL' in technical_indicators:
+                        self.strategy.macd_signal = int(technical_indicators['MACD_SIGNAL'])
+                        logger.info(f"✅ MACD signal period updated to {self.strategy.macd_signal}")
+
+                    if 'BB_PERIOD' in technical_indicators:
+                        self.strategy.bb_period = int(technical_indicators['BB_PERIOD'])
+                        logger.info(f"✅ Bollinger period updated to {self.strategy.bb_period}")
+
+                    if 'BB_STD_DEV' in technical_indicators:
+                        self.strategy.bb_std_dev = float(technical_indicators['BB_STD_DEV'])
+                        logger.info(f"✅ Bollinger std dev updated to {self.strategy.bb_std_dev}")
+
+                    if 'LLM_MAX_TOKENS' in llm_configuration:
+                        self.strategy.max_tokens = int(llm_configuration['LLM_MAX_TOKENS'])
+                        logger.info(f"✅ LLM max tokens updated to {self.strategy.max_tokens}")
+
+                    if 'LLM_TEMPERATURE' in llm_configuration:
+                        self.strategy.temperature = float(llm_configuration['LLM_TEMPERATURE'])
+                        logger.info(f"✅ LLM temperature updated to {self.strategy.temperature}")
+
+                    if 'LLM_MODEL_NAME' in llm_configuration:
+                        self.strategy.model_id = llm_configuration['LLM_MODEL_NAME']
+                        logger.info(f"✅ LLM model updated to {self.strategy.model_id}")
+
+                if 'LLM_PROVIDER' in llm_configuration:
+                    new_provider = str(llm_configuration['LLM_PROVIDER']).lower()
+                    self.llm_provider = new_provider
+                    if new_provider == 'bedrock' and self.strategy and not self.fast_mode:
+                        import boto3 as _boto3
+                        try:
+                            self.strategy.bedrock_client = _boto3.client('bedrock-runtime', region_name=self.aws_region)
+                            self.strategy.enable_llm = True
+                            logger.info(f"✅ LLM provider switched to Bedrock (region: {self.aws_region})")
+                        except Exception as _e:
+                            logger.warning(f"⚠️ Could not init Bedrock client: {_e}")
+                    elif new_provider == 'openai':
+                        logger.info("ℹ️ OpenAI provider saved — will be active on next restart when LLM enabled")
+
+                if 'ENABLE_SENTIMENT_ANALYSIS' in llm_configuration:
+                    self.enable_sentiment_analysis = str(llm_configuration['ENABLE_SENTIMENT_ANALYSIS']).lower() in ('true', '1', 'yes')
+                    logger.info(f"✅ Sentiment analysis {'enabled' if self.enable_sentiment_analysis else 'disabled'}")
+
+                # Apply paper trading balances immediately (paper mode only)
+                if paper_trading and not self.auto_trading_enabled:
+                    new_usdt = float(paper_trading.get('PAPER_TRADING_INITIAL_BALANCE',
+                                     self.portfolio_manager.paper_trading_balances.get('USDT', 10000)))
+                    new_btc  = float(paper_trading.get('PAPER_TRADING_INITIAL_BTC',
+                                     self.portfolio_manager.paper_trading_balances.get('BTC', 0)))
+                    new_eth  = float(paper_trading.get('PAPER_TRADING_INITIAL_ETH',
+                                     self.portfolio_manager.paper_trading_balances.get('ETH', 0)))
+                    self.portfolio_manager.paper_trading_balances = {'USDT': new_usdt, 'BTC': new_btc, 'ETH': new_eth}
+                    self.portfolio_manager.balances = {
+                        'USDT': {'total': new_usdt, 'available': new_usdt, 'hold': 0.0},
+                        'BTC':  {'total': new_btc,  'available': new_btc,  'hold': 0.0},
+                        'ETH':  {'total': new_eth,  'available': new_eth,  'hold': 0.0},
+                    }
+                    self._balance_cache = {'value': new_usdt, 'ts': 0.0}  # Invalidate cache
+                    logger.info(f"✅ Paper trading balances reset — USDT: ${new_usdt:,.2f}, BTC: {new_btc}, ETH: {new_eth}")
+
+                message = 'Settings saved successfully to config/settings.json'
+                logger.info(message)
+
                 return jsonify({
                     'success': True,
-                    'message': 'Settings updated successfully',
-                    'settings': {
-                        'trading_pairs': self.trading_pairs,
-                        'min_confidence_threshold': self.min_confidence_threshold,
-                        'max_daily_trades': self.max_daily_trades,
-                        'trading_interval_minutes': self.trading_interval_minutes
-                    }
+                    'message': message,
+                    'settings': data
                 })
             except Exception as e:
                 logger.error(f"Error updating settings: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
-        
+
+        @self.app.route('/api/reset', methods=['POST'])
+        def reset_data():
+            """Reset/clear all logs, trades, and portfolio data"""
+            try:
+                data = request.get_json() or {}
+                reset_logs = data.get('reset_logs', True)
+                reset_trades = data.get('reset_trades', True)
+                reset_portfolio = data.get('reset_portfolio', True)
+
+                results = {
+                    'logs_cleared': False,
+                    'trades_cleared': False,
+                    'portfolio_reset': False
+                }
+
+                # Clear logs
+                if reset_logs:
+                    try:
+                        # Clear in-memory logs
+                        self.log_memory.clear()
+
+                        # Truncate the log file to remove all persisted logs
+                        import os
+                        log_file_path = 'logs/trading_agent.log'
+                        if os.path.exists(log_file_path):
+                            # Open in write mode to truncate the file
+                            with open(log_file_path, 'w') as f:
+                                f.write('')  # Clear the file
+                            logger.info("✅ Log file cleared")
+
+                        results['logs_cleared'] = True
+                        logger.info("✅ Logs cleared from memory and file")
+                    except Exception as e:
+                        logger.error(f"Error clearing logs: {e}")
+
+                # Clear trades
+                if reset_trades:
+                    try:
+                        # Clear in-memory trade history
+                        self.trade_history = []
+                        self.daily_trade_count = 0
+
+                        # Clear trade tracker data
+                        self.trade_tracker.trades = []
+                        self.trade_tracker.portfolio = {
+                            "initial_balance": 0.0,
+                            "current_balance": 0.0,
+                            "total_invested": 0.0,
+                            "total_fees": 0.0,
+                            "positions": {},
+                            "last_updated": datetime.now().isoformat()
+                        }
+
+                        # Save empty trades
+                        self.trade_tracker._save_trades()
+                        self.trade_tracker._save_portfolio()
+
+                        results['trades_cleared'] = True
+                        logger.info("✅ Trades cleared")
+                    except Exception as e:
+                        logger.error(f"Error clearing trades: {e}")
+
+                # Reset portfolio
+                if reset_portfolio:
+                    try:
+                        # Reset portfolio manager
+                        paper_trading_balances = self._load_paper_trading_balances()
+                        self.portfolio_manager.balances = self.portfolio_manager._get_mock_balances()
+                        self.portfolio_manager.positions = {}
+                        self.portfolio_manager.portfolio_value = paper_trading_balances.get('USDT', 10000.0)
+                        self.portfolio_manager.last_update = datetime.now()
+
+                        # Save to cache
+                        self.portfolio_manager.save_portfolio_cache()
+
+                        results['portfolio_reset'] = True
+                        logger.info("✅ Portfolio reset to initial state")
+                    except Exception as e:
+                        logger.error(f"Error resetting portfolio: {e}")
+
+                # Clear trading data files
+                if reset_trades:
+                    import os
+                    try:
+                        trades_file = os.path.join("trading_data", "trades.json")
+                        portfolio_file = os.path.join("trading_data", "portfolio.json")
+
+                        if os.path.exists(trades_file):
+                            os.remove(trades_file)
+                        if os.path.exists(portfolio_file):
+                            os.remove(portfolio_file)
+                    except Exception as e:
+                        logger.warning(f"Could not remove data files: {e}")
+
+                message = "Data reset completed"
+                if results['logs_cleared']:
+                    message += " - Logs cleared"
+                if results['trades_cleared']:
+                    message += " - Trades cleared"
+                if results['portfolio_reset']:
+                    message += " - Portfolio reset"
+
+                logger.info(f"🔄 {message}")
+
+                return jsonify({
+                    'success': True,
+                    'message': message,
+                    'results': results
+                })
+            except Exception as e:
+                logger.error(f"Error resetting data: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
         @self.app.route('/api/market/price/<symbol>', methods=['GET'])
         def get_market_price(symbol):
             """Get real-time market price data for a symbol"""
@@ -783,6 +1629,108 @@ class CryptoTradingAgent:
                 })
             except Exception as e:
                 logger.error(f"Error getting market price for {symbol}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/market/ticker/<symbol>', methods=['GET'])
+        def get_market_ticker(symbol):
+            """Get ticker data for a symbol"""
+            try:
+                stats = self.market_data.get_24hr_stats(symbol)
+                if not stats:
+                    price = self.market_data.get_current_price(symbol)
+                    stats = {'symbol': symbol, 'last': price}
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'ticker': stats,
+                    'timestamp': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting ticker for {symbol}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/market/ohlcv/<symbol>', methods=['GET'])
+        def get_market_ohlcv(symbol):
+            """Get OHLCV candles for a symbol"""
+            try:
+                timeframe = request.args.get('timeframe', '1h')
+                limit = request.args.get('limit', 100, type=int)
+                interval_map = {
+                    '1m': '1min',
+                    '5m': '5min',
+                    '15m': '15min',
+                    '30m': '30min',
+                    '1h': '1hour',
+                    '4h': '4hour',
+                    '1d': '1day',
+                    '1w': '1week',
+                }
+                interval = interval_map.get(timeframe, timeframe)
+                df = self.market_data.get_historical_klines(symbol, interval, limit=limit)
+                candles = []
+                if df is not None and not df.empty:
+                    for row in df.tail(limit).to_dict('records'):
+                        ts = row.get('timestamp')
+                        candles.append({
+                            'timestamp': ts.isoformat() if hasattr(ts, 'isoformat') else ts,
+                            'open': float(row.get('open', 0)),
+                            'high': float(row.get('high', 0)),
+                            'low': float(row.get('low', 0)),
+                            'close': float(row.get('close', 0)),
+                            'volume': float(row.get('volume', 0)),
+                        })
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'candles': candles,
+                    'count': len(candles)
+                })
+            except Exception as e:
+                logger.error(f"Error getting OHLCV for {symbol}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/market/orderbook/<symbol>', methods=['GET'])
+        def get_market_orderbook(symbol):
+            """Get order book depth for a symbol"""
+            try:
+                depth = request.args.get('depth', 20, type=int)
+                orderbook = self.market_data.get_order_book(symbol)
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'bids': orderbook.get('bids', [])[:depth],
+                    'asks': orderbook.get('asks', [])[:depth],
+                    'timestamp': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting orderbook for {symbol}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/market/trades/<symbol>', methods=['GET'])
+        def get_market_recent_trades(symbol):
+            """Get recent market trades for a symbol"""
+            try:
+                limit = request.args.get('limit', 50, type=int)
+                raw_trades = []
+                if hasattr(self.market_client, 'get_trade_histories'):
+                    raw_trades = self.market_client.get_trade_histories(symbol)
+                trades = []
+                for trade in (raw_trades or [])[:limit]:
+                    trades.append({
+                        'price': float(trade.get('price', 0)),
+                        'size': float(trade.get('size', 0)),
+                        'side': trade.get('side', ''),
+                        'time': trade.get('time') or trade.get('createdAt'),
+                    })
+                return jsonify({
+                    'success': True,
+                    'symbol': symbol,
+                    'trades': trades,
+                    'count': len(trades)
+                })
+            except Exception as e:
+                logger.error(f"Error getting recent market trades for {symbol}: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
         
         @self.app.route('/api/logs', methods=['GET', 'POST'])
@@ -835,11 +1783,172 @@ class CryptoTradingAgent:
             except Exception as e:
                 logger.error(f"Error getting logs: {e}")
                 return jsonify({'success': False, 'error': str(e)}), 500
-        
-        
-        
-        
-    
+
+        @self.app.route('/api/trades', methods=['GET'])
+        def get_trades():
+            """Get trading history/trades"""
+            try:
+                limit = request.args.get('limit', type=int)
+                symbol = request.args.get('symbol')
+
+                trades_list = self._get_api_trades(symbol=symbol)
+
+                # Sort by timestamp descending
+                trades_list.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                if limit:
+                    trades_list = trades_list[:limit]
+
+                # Count open and closed trades
+                open_trades = [t for t in trades_list if t.get('status') == 'open']
+                closed_trades = [t for t in trades_list if t.get('status') == 'closed']
+
+                return jsonify({
+                    'success': True,
+                    'trades': trades_list,
+                    'total': len(trades_list),
+                    'open': len(open_trades),
+                    'closed': len(closed_trades)
+                })
+            except Exception as e:
+                logger.error(f"Error getting trades: {e}")
+                return jsonify({
+                    'success': True,
+                    'trades': [],
+                    'total': 0,
+                    'open': 0,
+                    'closed': 0
+                })
+
+        @self.app.route('/api/trades/<trade_id>', methods=['GET'])
+        def get_trade(trade_id):
+            """Get a single trade by ID"""
+            try:
+                trade = self.trade_tracker.get_trade_by_id(trade_id) if hasattr(self, 'trade_tracker') else None
+                if not trade:
+                    return jsonify({'success': False, 'error': 'Trade not found'}), 404
+                return jsonify({'success': True, 'trade': self._serialize_trade_for_api(trade)})
+            except Exception as e:
+                logger.error(f"Error getting trade {trade_id}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/trades/execute', methods=['POST'])
+        def execute_trade_api():
+            """Execute a manual trade through the same trading engine used by analysis."""
+            try:
+                data = request.get_json() or {}
+                symbol = data.get('symbol') or data.get('pair')
+                action = (data.get('action') or data.get('side') or '').upper()
+                confidence = float(data.get('confidence', 1.0))
+
+                if not symbol or action not in ('BUY', 'SELL'):
+                    return jsonify({'success': False, 'error': 'symbol and BUY/SELL action are required'}), 400
+
+                executed = self.execute_trade(symbol, action, confidence, {'source': 'manual_api'})
+                return jsonify({
+                    'success': executed,
+                    'message': 'Trade executed' if executed else 'Trade was rejected by risk or strategy checks',
+                    'symbol': symbol,
+                    'action': action
+                }), 200 if executed else 409
+            except Exception as e:
+                logger.error(f"Error executing manual trade: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/positions/<position_id>/close', methods=['POST'])
+        def close_position_api(position_id):
+            """Close a tracked position/trade at the current or provided exit price."""
+            try:
+                data = request.get_json(silent=True) or {}
+                exit_price = data.get('exit_price')
+                trade = self.trade_tracker.get_trade_by_id(position_id) if hasattr(self, 'trade_tracker') else None
+
+                if not trade:
+                    return jsonify({'success': False, 'error': 'Position not found'}), 404
+
+                if exit_price is None:
+                    exit_price = self.market_data.get_current_price(trade.symbol)
+                if exit_price is None:
+                    return jsonify({'success': False, 'error': 'Could not determine exit price'}), 400
+
+                closed = self.trade_tracker.close_position(position_id, float(exit_price))
+                return jsonify({
+                    'success': closed,
+                    'message': 'Position closed' if closed else 'Position could not be closed',
+                    'position_id': position_id,
+                    'exit_price': float(exit_price)
+                }), 200 if closed else 409
+            except Exception as e:
+                logger.error(f"Error closing position {position_id}: {e}")
+                return jsonify({'success': False, 'error': str(e)}), 500
+
+        @self.app.route('/api/performance', methods=['GET'])
+        def get_performance():
+            """Get performance metrics"""
+            try:
+                # Get performance data from trade_tracker
+                metrics = self.trade_tracker.get_performance_summary() if hasattr(self, 'trade_tracker') else {}
+
+                return jsonify({
+                    'success': True,
+                    'total_pnl': metrics.get('total_pnl', 0),
+                    'win_rate': metrics.get('win_rate', 0),
+                    'total_trades': metrics.get('total_trades', 0),
+                    'winning_trades': metrics.get('winning_trades', 0),
+                    'losing_trades': metrics.get('losing_trades', 0),
+                    'sharpe_ratio': metrics.get('sharpe_ratio', 0),
+                    'max_drawdown': metrics.get('max_drawdown', 0),
+                    'avg_win': metrics.get('avg_win', 0),
+                    'avg_loss': metrics.get('avg_loss', 0),
+                    'timestamp': datetime.now().isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Error getting performance: {e}")
+                return jsonify({
+                    'success': True,
+                    'total_pnl': 0,
+                    'win_rate': 0,
+                    'total_trades': 0,
+                    'winning_trades': 0,
+                    'losing_trades': 0,
+                    'sharpe_ratio': 0,
+                    'max_drawdown': 0,
+                    'avg_win': 0,
+                    'avg_loss': 0
+                })
+
+        @self.app.route('/api/positions/open', methods=['GET'])
+        def get_open_positions():
+            """Get open positions"""
+            try:
+                # Get open positions from portfolio manager
+                positions = self.portfolio_manager.get_positions() if hasattr(self, 'portfolio_manager') else []
+
+                positions_list = []
+                for symbol, position_data in positions.items() if isinstance(positions, dict) else []:
+                    positions_list.append({
+                        'symbol': symbol,
+                        'amount': position_data.get('amount', 0),
+                        'entry_price': position_data.get('entry_price', 0),
+                        'current_price': position_data.get('current_price', 0),
+                        'pnl': position_data.get('pnl', 0),
+                        'pnl_percent': position_data.get('pnl_percent', 0)
+                    })
+
+                return jsonify({
+                    'success': True,
+                    'positions': positions_list,
+                    'count': len(positions_list)
+                })
+            except Exception as e:
+                logger.error(f"Error getting open positions: {e}")
+                return jsonify({
+                    'success': True,
+                    'positions': [],
+                    'count': 0
+                })
+
+
+
     def start_flask_server(self):
         """Start Flask server in a separate thread"""
         if not self.app:
@@ -868,8 +1977,8 @@ class CryptoTradingAgent:
             # Update portfolio data first
             self._update_portfolio_data()
             
-            # Get historical data (reduced for fast mode)
-            limit = 200 if self.fast_mode else 500
+            # Get historical data — respects the HISTORICAL_DATA_LIMIT setting
+            limit = getattr(self, 'historical_data_limit', 200 if self.fast_mode else 500)
             df = self.market_data.get_historical_klines(symbol, '1hour', limit=limit)
             if df.empty:
                 logger.error(f"❌ No data available for {symbol}")
@@ -878,9 +1987,9 @@ class CryptoTradingAgent:
             # Get current price
             current_price = df['close'].iloc[-1]
             
-            # Get news data only if LLM is enabled
+            # Get news data only if LLM and sentiment analysis are enabled
             news_data = []
-            if use_llm and not self.fast_mode:
+            if use_llm and not self.fast_mode and getattr(self, 'enable_sentiment_analysis', True):
                 news_data = self.market_data.get_news_data(symbol)
             
             # Generate trading strategy
@@ -1430,10 +2539,29 @@ class CryptoTradingAgent:
             "daily_trades_today": self.daily_trade_count,
             "auto_trading_enabled": self.auto_trading_enabled
         }
-        
+
         # Get comprehensive performance metrics
         performance_metrics = self.trade_tracker.get_performance_metrics(days=days)
-        
+
+        # If there's an error (no trades), return clean empty metrics instead
+        if 'error' in performance_metrics:
+            performance_metrics = {
+                'total_trades': 0,
+                'winning_trades': 0,
+                'losing_trades': 0,
+                'win_rate': 0,
+                'total_pnl': 0,
+                'avg_pnl_per_trade': 0,
+                'profit_factor': 0,
+                'avg_win': 0,
+                'avg_loss': 0,
+                'largest_win': 0,
+                'largest_loss': 0,
+                'closed_trades': 0,
+                'executed_trades': 0,
+                'paper_trades': 0
+            }
+
         # Combine both
         return {**basic_stats, **performance_metrics}
     

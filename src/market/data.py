@@ -6,13 +6,36 @@ from typing import List, Dict, Optional
 import time
 import requests
 from ..utils.config_manager import config
+from .yahoo_finance import YahooFinanceDataFetcher
+from ..core.logger import get_logger
 
 API_CONFIG = config.api
+logger = get_logger(__name__)
 
 class MarketDataManager:
     def __init__(self, market_client: Client):
         self.client = market_client
-    
+        self.yahoo_finance = YahooFinanceDataFetcher()
+        self.use_yahoo_fallback = False
+
+        # Check if KuCoin API is available
+        self._check_api_availability()
+
+    def _check_api_availability(self):
+        """Check if KuCoin API is available with valid credentials"""
+        try:
+            # Try a simple public API call to test connectivity
+            test_result = self.client.get_ticker('BTC-USDT')
+            if test_result and 'price' in test_result:
+                self.use_yahoo_fallback = False
+                logger.info("✅ KuCoin API is available")
+            else:
+                self.use_yahoo_fallback = True
+                logger.warning("⚠️  KuCoin API unavailable, using Yahoo Finance fallback")
+        except Exception as e:
+            self.use_yahoo_fallback = True
+            logger.warning(f"⚠️  KuCoin API error: {e}. Using Yahoo Finance fallback")
+
     def retry_api_call(self, func, *args, **kwargs):
         """Retry API calls with exponential backoff"""
         max_retries = getattr(API_CONFIG, 'max_retries', 5)
@@ -32,43 +55,60 @@ class MarketDataManager:
                 raise e
         return None
         
-    def get_historical_klines(self, symbol: str, interval: str = '1hour', 
-                             start_time: Optional[str] = None, 
+    def get_historical_klines(self, symbol: str, interval: str = '1hour',
+                             start_time: Optional[str] = None,
                              end_time: Optional[str] = None,
                              limit: int = 1000) -> pd.DataFrame:
-        """Get historical kline data from KuCoin"""
+        """Get historical kline data from KuCoin or Yahoo Finance"""
         try:
+            # Use Yahoo Finance if KuCoin is unavailable
+            if self.use_yahoo_fallback:
+                logger.debug(f"Using Yahoo Finance for historical data: {symbol}")
+                df = self.yahoo_finance.get_klines(symbol, interval, limit)
+                if not df.empty:
+                    # Convert timestamp to datetime
+                    df['timestamp'] = pd.to_datetime(df['time'], unit='s')
+                    df = df.drop('time', axis=1)
+                    return df
+                return pd.DataFrame()
+
             # If no start time provided, get data from 30 days ago
             if not start_time:
                 start_time = int((datetime.now() - timedelta(days=30)).timestamp())
             if not end_time:
                 end_time = int(datetime.now().timestamp())
-                
+
             klines = self.client.get_kline_data(
                 symbol=symbol,
                 kline_type=interval,
                 startAt=start_time,
                 endAt=end_time
             )
-            
+
             # Convert to DataFrame
             df = pd.DataFrame(klines, columns=[
                 'timestamp', 'open', 'close', 'high', 'low', 'volume', 'turnover'
             ])
-            
+
             # Convert data types
             df['timestamp'] = pd.to_datetime(df['timestamp'].astype(float), unit='s')
             numeric_columns = ['open', 'close', 'high', 'low', 'volume', 'turnover']
             df[numeric_columns] = df[numeric_columns].astype(float)
-            
+
             # Sort by timestamp
             df = df.sort_values('timestamp').reset_index(drop=True)
-            
+
             return df
-            
+
         except Exception as e:
             print(f"Error fetching historical data: {e}")
-            return pd.DataFrame()
+            # Try Yahoo Finance as fallback
+            logger.warning(f"Falling back to Yahoo Finance for historical data: {symbol}")
+            df = self.yahoo_finance.get_klines(symbol, interval, limit)
+            if not df.empty:
+                df['timestamp'] = pd.to_datetime(df['time'], unit='s')
+                df = df.drop('time', axis=1)
+            return df
     
     def get_historical_data(self, symbol: str, interval: str = '1hour', limit: int = 500) -> pd.DataFrame:
         """Get historical data as pandas DataFrame for strategy analysis"""
@@ -96,6 +136,11 @@ class MarketDataManager:
     def get_current_price(self, symbol: str) -> float:
         """Get current price for a symbol"""
         try:
+            # Use Yahoo Finance if KuCoin is unavailable
+            if self.use_yahoo_fallback:
+                logger.debug(f"Using Yahoo Finance for {symbol}")
+                return self.yahoo_finance.get_current_price(symbol)
+
             print(f"DEBUG: Attempting to get ticker for {symbol}")
             ticker = self.retry_api_call(self.client.get_ticker, symbol)
             print(f"DEBUG: Ticker result for {symbol}: {ticker}")
@@ -107,7 +152,9 @@ class MarketDataManager:
             return None
         except Exception as e:
             print(f"Error fetching current price for {symbol}: {e}")
-            return None
+            # Try Yahoo Finance as fallback
+            logger.warning(f"Falling back to Yahoo Finance for {symbol}")
+            return self.yahoo_finance.get_current_price(symbol)
     
     def get_order_book(self, symbol: str) -> Dict:
         """Get order book data"""
@@ -125,6 +172,11 @@ class MarketDataManager:
     def get_24hr_stats(self, symbol: str) -> Dict:
         """Get 24hr statistics"""
         try:
+            # Use Yahoo Finance if KuCoin is unavailable
+            if self.use_yahoo_fallback:
+                logger.debug(f"Using Yahoo Finance for 24hr stats: {symbol}")
+                return self.yahoo_finance.get_24hr_stats(symbol)
+
             stats = self.client.get_24h_stats(symbol)
             return {
                 'symbol': stats['symbol'],

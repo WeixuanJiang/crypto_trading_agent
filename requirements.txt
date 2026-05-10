@@ -4,10 +4,12 @@ flask-cors==6.0.1
 python-dotenv==1.1.1
 python-kucoin==2.2.0
 boto3==1.40.2
-pandas==2.3.1
-numpy==1.26.4
-pandas-ta==0.3.14b0
+pandas>=2.0.0
+numpy>=1.24.0
+pandas-ta-classic>=0.3.36
 SQLAlchemy==2.0.41
+openai>=1.0.0
+yfinance>=0.2.40
 
 # Data visualization and analysis
 matplotlib==3.10.5

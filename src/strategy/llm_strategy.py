@@ -1,7 +1,7 @@
 import boto3
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+import pandas_ta_classic as ta
 import json
 import os
 from datetime import datetime, timedelta
