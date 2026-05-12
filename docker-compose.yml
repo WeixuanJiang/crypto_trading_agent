@@ -4,7 +4,7 @@ services:
   crypto-trading-agent:
     build: .
     container_name: crypto-trading-agent
-    command: ["python", "main.py", "--auto-trading"]
+    command: ["python", "main.py"]
     environment:
       - LOG_LEVEL=INFO
       - LOG_TO_FILE=true
@@ -15,7 +15,27 @@ services:
       # Persistent data storage
       - ./trading_data:/app/trading_data
       - ./logs:/app/logs
+      - ./data:/app/data
       - ./.env:/app/.env:ro
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    networks:
+      - trading-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=http://localhost:5001
+    container_name: crypto-trading-agent-frontend
+    environment:
+      - PORT=8501
+    ports:
+      - "8501:8501"
+    depends_on:
+      - crypto-trading-agent
     restart: unless-stopped
     networks:
       - trading-network

@@ -6,6 +6,7 @@ compatibility with the main application while removing AWS dependencies
 (except for Bedrock which is kept for LLM functionality).
 """
 
+from typing import Dict
 from .tracker import TradeTracker
 from ..notifications.service import NotificationService
 
@@ -17,8 +18,8 @@ class EnhancedTradeTracker(TradeTracker):
     to maintain compatibility with the main application.
     """
     
-    def __init__(self, data_dir: str = "trading_data"):
-        super().__init__(data_dir)
+    def __init__(self, data_dir: str = "trading_data", db_manager=None, trade_repository=None):
+        super().__init__(data_dir, db_manager, trade_repository)
         self.notification_service = NotificationService()
     
     def send_system_alert(self, message: str, subject: str = "Crypto Trading Agent Alert"):
@@ -75,11 +76,59 @@ class EnhancedTradeTracker(TradeTracker):
         
         return trade_id
 
-def create_trade_tracker():
+    def get_all_trades(self) -> Dict:
+        """
+        Get all trades as a dictionary
+
+        Returns:
+            Dict: Dictionary of all trades indexed by trade ID
+        """
+        trades_dict = {}
+        for trade in self.trades:
+            # Convert Trade dataclass to dict
+            trade_dict = {
+                'id': trade.id,
+                'timestamp': trade.timestamp,
+                'symbol': trade.symbol,
+                'side': trade.action,
+                'action': trade.action,
+                'amount': trade.size,
+                'price': trade.price,
+                'value': trade.value,
+                'confidence': trade.confidence,
+                'order_id': trade.order_id,
+                'status': 'closed' if trade.is_closed else 'open',
+                'fees': trade.fees,
+                'pnl': trade.pnl if trade.pnl is not None else 0.0,
+                'pnl_percent': trade.pnl_percent if trade.pnl_percent is not None else 0.0,
+                'strategy': 'hybrid',  # Default strategy
+                'stop_loss': trade.stop_loss,
+                'take_profit': trade.take_profit,
+                'exit_timestamp': trade.exit_timestamp,
+                'exit_price': trade.exit_price,
+                'exit_reason': trade.exit_reason
+            }
+            trades_dict[trade.id] = trade_dict
+
+        return trades_dict
+
+    def get_performance_summary(self, days: int = 30) -> Dict:
+        """
+        Alias for get_performance_metrics for API compatibility
+
+        Args:
+            days: Number of days to include in performance calculation
+
+        Returns:
+            Dict: Performance metrics and statistics
+        """
+        return self.get_performance_metrics(days)
+
+def create_trade_tracker(db_manager=None, trade_repository=None):
     """
     Create and return an EnhancedTradeTracker instance
     
     This function maintains compatibility with the existing codebase
     while using the local TradeTracker with notification capabilities.
     """
-    return EnhancedTradeTracker()
+    return EnhancedTradeTracker(db_manager=db_manager, trade_repository=trade_repository)

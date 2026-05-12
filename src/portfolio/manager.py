@@ -26,21 +26,33 @@ class Position:
 class PortfolioManager:
     """Manages cryptocurrency portfolio with balance-aware trading"""
     
-    def __init__(self, user_client=None, market_client=None, trade_tracker=None, config=None):
+    def __init__(self, user_client=None, market_client=None, trade_tracker=None, config=None,
+                 db_manager=None, position_repository=None, paper_trading_balances=None):
         self.user_client = user_client
         self.market_client = market_client
         self.trade_tracker = trade_tracker
         self.config = config
+        self.db_manager = db_manager
+        self.position_repository = position_repository
+        self.use_database = db_manager is not None and position_repository is not None
+
+        # Paper trading configuration
+        self.paper_trading_balances = paper_trading_balances or {
+            'USDT': 10000.0,
+            'BTC': 0.0,
+            'ETH': 0.0
+        }
+
         self.positions = {}
         self.balances = {}
         self.portfolio_value = 0.0
         self.last_update = None
-        
+
         # Portfolio limits
         self.max_position_percentage = 0.25  # Max 25% per asset
         self.min_trade_size_usdt = config.trading.min_trade_size_usdt if config else 2.0  # Minimum trade size
         self.rebalance_threshold = 0.05  # 5% deviation triggers rebalancing consideration
-        
+
         # Load cached positions
         self._load_cached_positions()
     
@@ -84,16 +96,22 @@ class PortfolioManager:
             
         except Exception as e:
             print(f"❌ Error updating balances: {e}")
-            return self._get_mock_balances()
+            self.balances = self._get_mock_balances()
+            self.last_update = datetime.now()
+            return self.balances
     
     def _get_mock_balances(self) -> Dict[str, float]:
-        """Get mock balances for testing"""
+        """Get paper trading balances from configuration"""
+        usdt_balance = self.paper_trading_balances.get('USDT', 10000.0)
+        btc_balance = self.paper_trading_balances.get('BTC', 0.0)
+        eth_balance = self.paper_trading_balances.get('ETH', 0.0)
+
         return {
-            'USDT': {'total': 1000.0, 'available': 800.0, 'hold': 200.0},
-            'BTC': {'total': 0.05, 'available': 0.05, 'hold': 0.0},
-            'ETH': {'total': 0.8, 'available': 0.8, 'hold': 0.0},
-            'ADA': {'total': 500.0, 'available': 500.0, 'hold': 0.0},
-            'DOT': {'total': 20.0, 'available': 20.0, 'hold': 0.0}
+            'USDT': {'total': usdt_balance, 'available': usdt_balance, 'hold': 0.0},
+            'BTC': {'total': btc_balance, 'available': btc_balance, 'hold': 0.0},
+            'ETH': {'total': eth_balance, 'available': eth_balance, 'hold': 0.0},
+            'ADA': {'total': 0.0, 'available': 0.0, 'hold': 0.0},
+            'DOT': {'total': 0.0, 'available': 0.0, 'hold': 0.0}
         }
     
     def update_positions(self, current_prices: Dict[str, float]) -> Dict[str, Position]:
@@ -351,19 +369,94 @@ class PortfolioManager:
         return summary
     
     def _load_cached_positions(self):
-        """Load cached position data"""
+        """Load cached position data from database or JSON file"""
+        try:
+            if self.use_database:
+                self._load_positions_from_db()
+            else:
+                self._load_positions_from_json()
+        except Exception as e:
+            print(f"⚠️ Could not load cached positions: {e}")
+    
+    def _load_positions_from_db(self):
+        """Load position data from database"""
+        try:
+            positions = self.position_repository.get_all_open()
+            print(f"📁 Loaded {len(positions)} positions from database")
+        except Exception as e:
+            print(f"⚠️ Error loading positions from database: {e}")
+            # Fallback to JSON
+            self._load_positions_from_json()
+    
+    def _load_positions_from_json(self):
+        """Load position data from JSON file (fallback)"""
         try:
             cache_file = "trading_data/portfolio_cache.json"
             if os.path.exists(cache_file):
                 with open(cache_file, 'r') as f:
                     cache_data = json.load(f)
                     # Load any cached data here
-                    print("📁 Loaded cached portfolio data")
+                    print("📁 Loaded cached portfolio data from JSON")
         except Exception as e:
-            print(f"⚠️ Could not load cached positions: {e}")
+            print(f"⚠️ Could not load cached positions from JSON: {e}")
     
     def save_portfolio_cache(self):
-        """Save portfolio data to cache"""
+        """Save portfolio data to database or cache file"""
+        try:
+            if self.use_database:
+                self._save_positions_to_db()
+            else:
+                self._save_positions_to_json()
+        except Exception as e:
+            print(f"⚠️ Could not save portfolio cache: {e}")
+    
+    def _save_positions_to_db(self):
+        """Save position data to database"""
+        try:
+            # Import the Position model from data.models
+            from ..data.models import Position as DBPosition, PositionStatus
+            from decimal import Decimal
+            import uuid
+            
+            # Save positions to database
+            for symbol, position in self.positions.items():
+                # Check if position already exists
+                existing = self.position_repository.get_by_symbol(symbol)
+                
+                if existing:
+                    # Update existing position
+                    existing.quantity = Decimal(str(position.quantity))
+                    existing.average_price = Decimal(str(position.average_price))
+                    existing.current_price = Decimal(str(position.current_price))
+                    existing.market_value = Decimal(str(position.market_value))
+                    existing.unrealized_pnl = Decimal(str(position.unrealized_pnl))
+                    existing.unrealized_pnl_percent = position.unrealized_pnl_percent
+                    existing.last_updated = position.last_updated
+                    self.position_repository.update(existing)
+                else:
+                    # Create new position
+                    db_position = DBPosition(
+                        id=str(uuid.uuid4()),
+                        symbol=position.symbol,
+                        quantity=Decimal(str(position.quantity)),
+                        average_price=Decimal(str(position.average_price)),
+                        current_price=Decimal(str(position.current_price)),
+                        market_value=Decimal(str(position.market_value)),
+                        unrealized_pnl=Decimal(str(position.unrealized_pnl)),
+                        unrealized_pnl_percent=position.unrealized_pnl_percent,
+                        status=PositionStatus.OPEN,
+                        opened_at=position.last_updated,
+                        last_updated=position.last_updated
+                    )
+                    self.position_repository.create(db_position)
+            print("💾 Saved portfolio positions to database")
+        except Exception as e:
+            print(f"⚠️ Error saving positions to database: {e}")
+            # Fallback to JSON
+            self._save_positions_to_json()
+    
+    def _save_positions_to_json(self):
+        """Save portfolio data to JSON file (fallback)"""
         try:
             os.makedirs("trading_data", exist_ok=True)
             cache_data = {
@@ -381,6 +474,7 @@ class PortfolioManager:
             
             with open("trading_data/portfolio_cache.json", 'w') as f:
                 json.dump(cache_data, f, indent=2)
+            print("💾 Saved portfolio cache to JSON")
                 
         except Exception as e:
-            print(f"⚠️ Could not save portfolio cache: {e}")
+            print(f"⚠️ Could not save portfolio cache to JSON: {e}")
