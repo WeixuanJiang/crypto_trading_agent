@@ -240,7 +240,7 @@ export default function RealTimeLogs() {
         sx={{
           flexGrow: 1,
           overflowY: 'auto',
-          bgcolor: '#1e1e1e',
+          bgcolor: '#050914',
           borderRadius: 1,
           p: 2,
           fontFamily: 'monospace',
@@ -267,11 +267,11 @@ export default function RealTimeLogs() {
                   bgcolor: 'rgba(255,255,255,0.05)'
                 },
                 borderLeft: `3px solid ${
-                  log.level === 'ERROR' ? '#f44336' :
-                  log.level === 'WARNING' ? '#ff9800' :
-                  log.level === 'SUCCESS' ? '#4caf50' :
-                  log.level === 'INFO' ? '#2196f3' :
-                  '#9e9e9e'
+                  log.level === 'ERROR' ? '#ef4444' :
+                  log.level === 'WARNING' ? '#eab308' :
+                  log.level === 'SUCCESS' ? '#22c55e' :
+                  log.level === 'INFO' ? '#3b82f6' :
+                  '#64748b'
                 }`
               }}
             >

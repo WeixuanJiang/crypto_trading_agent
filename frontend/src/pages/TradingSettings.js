@@ -23,9 +23,9 @@ function PanelHeader({ children, right }) {
 
 function TermBtn({ children, onClick, disabled, variant = 'default', loading }) {
   const styles = {
-    save:    { bg: '#001a12', border: T.green,  color: T.green },
+    save:    { bg: 'rgba(168,85,247,0.08)', border: T.green,  color: T.green },
     reset:   { bg: 'transparent', border: T.dim, color: T.text2 },
-    danger:  { bg: '#1a0008', border: T.red,    color: T.red },
+    danger:  { bg: 'rgba(239,68,68,0.08)',  border: T.red,    color: T.red },
     default: { bg: 'transparent', border: T.border, color: T.text2 },
   };
   const s = styles[variant] || styles.default;

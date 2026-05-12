@@ -128,7 +128,7 @@ const PriceIndicator = ({ result }) => {
       <Grid item xs={6} sm={3}>
         <Paper 
           elevation={2} 
-          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#252525', borderRadius: 2 }}
+          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#111827', borderRadius: 2 }}
         >
           <Typography variant="caption" display="block" color="grey.300">RSI</Typography>
           <Typography 
@@ -144,7 +144,7 @@ const PriceIndicator = ({ result }) => {
       <Grid item xs={6} sm={3}>
         <Paper 
           elevation={2} 
-          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#252525', borderRadius: 2 }}
+          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#111827', borderRadius: 2 }}
         >
           <Typography variant="caption" display="block" color="grey.300">Volatility</Typography>
           <Typography variant="h6" color="white" sx={{ fontSize: '1.3rem', fontWeight: 'medium' }}>
@@ -156,7 +156,7 @@ const PriceIndicator = ({ result }) => {
       <Grid item xs={6} sm={3}>
         <Paper 
           elevation={2} 
-          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#252525', borderRadius: 2 }}
+          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#111827', borderRadius: 2 }}
         >
           <Typography variant="caption" display="block" color="grey.300">24h Change</Typography>
           <Typography 
@@ -172,7 +172,7 @@ const PriceIndicator = ({ result }) => {
       <Grid item xs={6} sm={3}>
         <Paper 
           elevation={2} 
-          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#252525', borderRadius: 2 }}
+          sx={{ p: 1.5, textAlign: 'center', bgcolor: '#111827', borderRadius: 2 }}
         >
           <Typography variant="caption" display="block" color="grey.300">Trend</Typography>
           <Typography 
@@ -436,7 +436,7 @@ export default function TradeControls({ status, onAction }) {
                               height: '100%',
                               display: 'flex',
                               flexDirection: 'column',
-                              backgroundColor: '#1a1a1a'
+                              backgroundColor: '#0b1121'
                             }}
                           >
                             <CardContent sx={{ flexGrow: 1, p: 4 }}>
@@ -448,7 +448,7 @@ export default function TradeControls({ status, onAction }) {
                                   alignItems: 'center',
                                   mb: 1,
                                   pb: 1,
-                                  borderBottom: '1px solid #333'
+                                  borderBottom: '1px solid #1e293b'
                                 }}
                               >
                                 <Typography variant="h6" fontWeight="bold" color="white">
@@ -491,7 +491,7 @@ export default function TradeControls({ status, onAction }) {
                                     elevation={0}
                                     sx={{ 
                                       p: 2, 
-                                      bgcolor: '#252525',
+                                      bgcolor: '#111827',
                                       display: 'flex',
                                       justifyContent: 'center',
                                       alignItems: 'center',

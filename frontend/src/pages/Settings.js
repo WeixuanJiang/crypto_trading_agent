@@ -69,7 +69,7 @@ function TermInput({ value, onChange, type = 'text', placeholder, masked }) {
 
 function TermBtn({ children, onClick, disabled, variant = 'default', loading }) {
   const styles = {
-    save:    { bg: '#001a12', border: T.green,  color: T.green },
+    save:    { bg: 'rgba(168,85,247,0.08)', border: T.green,  color: T.green },
     default: { bg: 'transparent', border: T.border, color: T.text2 },
   };
   const s = styles[variant] || styles.default;

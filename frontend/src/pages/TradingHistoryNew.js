@@ -213,7 +213,7 @@ export default function TradingHistory() {
                           border: '1px solid',
                           color: status === 'CLOSED' ? T.text2 : T.green,
                           borderColor: status === 'CLOSED' ? T.border : T.green,
-                          background: status === 'CLOSED' ? 'transparent' : '#001e28',
+                          background: status === 'CLOSED' ? 'transparent' : 'rgba(168,85,247,0.1)',
                         }}>
                           {status.toUpperCase()}
                         </Box>

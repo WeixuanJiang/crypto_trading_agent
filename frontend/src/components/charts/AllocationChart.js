@@ -19,16 +19,16 @@ import { ChartSkeleton } from '../common/LoadingSkeleton';
 
 // Color palette for different assets
 const COLORS = [
-  '#00d4ff', // Cyan (primary)
-  '#b388ff', // Purple (secondary)
-  '#00e676', // Green (success)
-  '#ffab00', // Orange (warning)
-  '#00b0ff', // Blue (info)
-  '#ff1744', // Red (error)
-  '#69f0ae', // Light green
-  '#ff9100', // Deep orange
-  '#18ffff', // Cyan accent
-  '#ea80fc'  // Purple accent
+  '#a855f7', // Purple (primary)
+  '#3b82f6', // Blue (secondary)
+  '#22c55e', // Green (success)
+  '#eab308', // Yellow (warning)
+  '#c084fc', // Purple light
+  '#ef4444', // Red (error)
+  '#4ade80', // Light green
+  '#60a5fa', // Blue light
+  '#f59e0b', // Amber
+  '#818cf8'  // Indigo
 ];
 
 /**
@@ -190,7 +190,7 @@ const AllocationChart = ({
               labelLine={false}
               label={renderCustomLabel}
               outerRadius={Math.min(height * 0.35, 120)}
-              fill="#8884d8"
+              fill="#a855f7"
               dataKey="value"
             >
               {chartData.map((entry, index) => (
@@ -277,7 +277,7 @@ export const DonutAllocationChart = (props) => {
               cy="50%"
               innerRadius="60%"
               outerRadius="80%"
-              fill="#8884d8"
+              fill="#a855f7"
               paddingAngle={2}
               dataKey="value"
             >

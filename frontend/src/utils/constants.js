@@ -40,17 +40,17 @@ export const POPULAR_PAIRS = [
 
 // Chart Colors
 export const CHART_COLORS = {
-  primary: '#00d4ff',
-  secondary: '#b388ff',
-  success: '#00e676',
-  error: '#ff1744',
-  warning: '#ffab00',
-  info: '#00b0ff',
-  bull: '#00e676',
-  bear: '#ff1744',
-  volume: '#00b0ff',
-  grid: '#1e2235',
-  text: '#b0bec5'
+  primary: '#a855f7',
+  secondary: '#c084fc',
+  success: '#22c55e',
+  error: '#ef4444',
+  warning: '#eab308',
+  info: '#3b82f6',
+  bull: '#22c55e',
+  bear: '#ef4444',
+  volume: '#3b82f6',
+  grid: '#1e293b',
+  text: '#94a3b8'
 };
 
 // Chart Indicators

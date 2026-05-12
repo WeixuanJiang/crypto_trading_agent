@@ -5,15 +5,15 @@ const terminalFont = "'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas'
 const darkTheme = createTheme({
   palette: {
     mode: 'dark',
-    primary:    { main: '#00d4aa', light: '#4dffda', dark: '#009e7e', contrastText: '#000' },
-    secondary:  { main: '#4db8ff', light: '#80ccff', dark: '#2a8fcc', contrastText: '#000' },
-    success:    { main: '#00d4aa', light: '#4dffda', dark: '#009e7e' },
-    error:      { main: '#ff4d6a', light: '#ff8096', dark: '#cc2244' },
-    warning:    { main: '#f5c842', light: '#ffd966', dark: '#c49a00' },
-    info:       { main: '#4db8ff', light: '#80ccff', dark: '#2a8fcc' },
-    background: { default: '#080c0f', paper: '#0e1519' },
-    text:       { primary: '#e0e8f0', secondary: '#c0c8d0', disabled: '#4a6070' },
-    divider:    '#1c2830',
+    primary:    { main: '#a855f7', light: '#c084fc', dark: '#7e22ce', contrastText: '#fff' },
+    secondary:  { main: '#3b82f6', light: '#60a5fa', dark: '#2563eb', contrastText: '#fff' },
+    success:    { main: '#22c55e', light: '#4ade80', dark: '#16a34a' },
+    error:      { main: '#ef4444', light: '#f87171', dark: '#dc2626' },
+    warning:    { main: '#eab308', light: '#facc15', dark: '#a16207' },
+    info:       { main: '#3b82f6', light: '#60a5fa', dark: '#2563eb' },
+    background: { default: '#050914', paper: '#111827' },
+    text:       { primary: '#f1f5f9', secondary: '#cbd5e1', disabled: '#64748b' },
+    divider:    '#1e293b',
   },
   typography: {
     fontFamily: terminalFont,
@@ -35,7 +35,7 @@ const darkTheme = createTheme({
   components: {
     MuiCssBaseline: {
       styleOverrides: {
-        body: { fontFamily: terminalFont, backgroundColor: '#080c0f', color: '#c0c8d0' },
+        body: { fontFamily: terminalFont, backgroundColor: '#050914', color: '#cbd5e1' },
       },
     },
     MuiPaper: {
@@ -43,8 +43,8 @@ const darkTheme = createTheme({
         root: {
           backgroundImage: 'none',
           borderRadius: 2,
-          border: '1px solid #1c2830',
-          background: '#0e1519',
+          border: '1px solid #1e293b',
+          background: '#111827',
         },
       },
     },
@@ -52,10 +52,10 @@ const darkTheme = createTheme({
       styleOverrides: {
         root: {
           borderRadius: 2,
-          border: '1px solid #1c2830',
-          background: '#0e1519',
+          border: '1px solid #1e293b',
+          background: '#111827',
           boxShadow: 'none',
-          '&:hover': { border: '1px solid #00d4aa44' },
+          '&:hover': { border: '1px solid #a855f744' },
         },
       },
     },
@@ -82,18 +82,18 @@ const darkTheme = createTheme({
     MuiTableCell: {
       styleOverrides: {
         root: {
-          borderBottom: '1px solid #1c2830', fontFamily: terminalFont,
-          fontSize: '11px', color: '#c0c8d0', padding: '8px 12px',
+          borderBottom: '1px solid #1e293b', fontFamily: terminalFont,
+          fontSize: '11px', color: '#cbd5e1', padding: '8px 12px',
         },
         head: {
           fontWeight: 600, fontSize: '10px', textTransform: 'uppercase',
-          letterSpacing: '.08em', color: '#4a6070', background: '#060a0d',
+          letterSpacing: '.08em', color: '#64748b', background: '#020617',
         },
       },
     },
     MuiTableRow: {
       styleOverrides: {
-        root: { '&:hover': { background: '#0d1a22' } },
+        root: { '&:hover': { background: '#0b1121' } },
       },
     },
     MuiTextField: {
@@ -101,88 +101,88 @@ const darkTheme = createTheme({
         root: {
           '& .MuiOutlinedInput-root': {
             borderRadius: 2, fontFamily: terminalFont, fontSize: '12px',
-            background: '#060a0d',
-            '& fieldset': { borderColor: '#1c2830' },
-            '&:hover fieldset': { borderColor: '#2a4050' },
-            '&.Mui-focused fieldset': { borderColor: '#00d4aa', borderWidth: 1 },
+            background: '#020617',
+            '& fieldset': { borderColor: '#1e293b' },
+            '&:hover fieldset': { borderColor: '#334155' },
+            '&.Mui-focused fieldset': { borderColor: '#a855f7', borderWidth: 1 },
           },
           '& .MuiInputLabel-root': {
-            fontFamily: terminalFont, fontSize: '11px', color: '#4a6070',
-            '&.Mui-focused': { color: '#00d4aa' },
+            fontFamily: terminalFont, fontSize: '11px', color: '#64748b',
+            '&.Mui-focused': { color: '#a855f7' },
           },
-          '& .MuiInputBase-input': { color: '#e0e8f0' },
+          '& .MuiInputBase-input': { color: '#f1f5f9' },
         },
       },
     },
     MuiSelect: {
       styleOverrides: {
         root: { fontFamily: terminalFont, fontSize: '12px' },
-        icon: { color: '#4a6070' },
+        icon: { color: '#64748b' },
       },
     },
     MuiMenuItem: {
       styleOverrides: {
         root: {
-          fontFamily: terminalFont, fontSize: '12px', color: '#c0c8d0',
-          '&:hover': { background: '#0d1a22' },
-          '&.Mui-selected': { background: '#001e28', color: '#00d4aa' },
+          fontFamily: terminalFont, fontSize: '12px', color: '#cbd5e1',
+          '&:hover': { background: '#0b1121' },
+          '&.Mui-selected': { background: 'rgba(168,85,247,0.1)', color: '#a855f7' },
         },
       },
     },
     MuiSwitch: {
       styleOverrides: {
-        switchBase: { '&.Mui-checked': { color: '#00d4aa' } },
-        track: { backgroundColor: '#1c2830' },
+        switchBase: { '&.Mui-checked': { color: '#a855f7' } },
+        track: { backgroundColor: '#1e293b' },
       },
     },
     MuiAlert: {
       styleOverrides: {
         root: { borderRadius: 2, fontFamily: terminalFont, fontSize: '11px', border: '1px solid' },
-        standardSuccess: { background: '#001a12', borderColor: '#00d4aa44', color: '#00d4aa' },
-        standardError: { background: '#1a0008', borderColor: '#ff4d6a44', color: '#ff4d6a' },
-        standardWarning: { background: '#1a1400', borderColor: '#f5c84244', color: '#f5c842' },
-        standardInfo: { background: '#001222', borderColor: '#4db8ff44', color: '#4db8ff' },
+        standardSuccess: { background: '#071810', borderColor: '#22c55e44', color: '#22c55e' },
+        standardError: { background: '#1a0606', borderColor: '#ef444444', color: '#ef4444' },
+        standardWarning: { background: '#1a1500', borderColor: '#eab30844', color: '#eab308' },
+        standardInfo: { background: '#06101e', borderColor: '#3b82f644', color: '#3b82f6' },
       },
     },
     MuiTooltip: {
       styleOverrides: {
         tooltip: {
-          background: '#0e1519', border: '1px solid #1c2830',
-          borderRadius: 2, fontFamily: terminalFont, fontSize: '11px', color: '#c0c8d0',
+          background: '#111827', border: '1px solid #1e293b',
+          borderRadius: 2, fontFamily: terminalFont, fontSize: '11px', color: '#cbd5e1',
         },
       },
     },
     MuiDivider: {
-      styleOverrides: { root: { borderColor: '#1c2830' } },
+      styleOverrides: { root: { borderColor: '#1e293b' } },
     },
     MuiAccordion: {
       styleOverrides: {
-        root: { background: '#0e1519', border: '1px solid #1c2830', borderRadius: '2px !important', boxShadow: 'none' },
+        root: { background: '#111827', border: '1px solid #1e293b', borderRadius: '2px !important', boxShadow: 'none' },
       },
     },
     MuiAccordionSummary: {
       styleOverrides: {
-        root: { fontFamily: terminalFont, fontSize: '11px', color: '#4a6070', '&:hover': { background: '#0d1a22' } },
+        root: { fontFamily: terminalFont, fontSize: '11px', color: '#64748b', '&:hover': { background: '#0b1121' } },
       },
     },
     MuiLinearProgress: {
       styleOverrides: {
-        root: { backgroundColor: '#1c2830', borderRadius: 0 },
-        bar: { backgroundColor: '#00d4aa' },
+        root: { backgroundColor: '#1e293b', borderRadius: 0 },
+        bar: { backgroundColor: '#a855f7' },
       },
     },
     MuiDrawer: {
-      styleOverrides: { paper: { background: '#0a0f13', border: 'none' } },
+      styleOverrides: { paper: { background: '#0b1121', border: 'none' } },
     },
     MuiAppBar: {
-      styleOverrides: { root: { background: '#0e1519', boxShadow: 'none', borderBottom: '1px solid #1c2830' } },
+      styleOverrides: { root: { background: '#111827', boxShadow: 'none', borderBottom: '1px solid #1e293b' } },
     },
     MuiCircularProgress: {
-      styleOverrides: { root: { color: '#00d4aa' } },
+      styleOverrides: { root: { color: '#a855f7' } },
     },
     MuiFormControlLabel: {
       styleOverrides: {
-        label: { fontFamily: terminalFont, fontSize: '11px', color: '#c0c8d0' },
+        label: { fontFamily: terminalFont, fontSize: '11px', color: '#cbd5e1' },
       },
     },
   },

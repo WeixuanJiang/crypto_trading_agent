@@ -20,8 +20,8 @@ function PanelHeader({ children, right }) {
 
 function TermBtn({ children, onClick, disabled, variant = 'default', loading }) {
   const colors = {
-    start:   { bg: '#001a12', border: T.green,  color: T.green },
-    stop:    { bg: '#1a0008', border: T.red,    color: T.red },
+    start:   { bg: 'rgba(168,85,247,0.08)', border: T.green,  color: T.green },
+    stop:    { bg: 'rgba(239,68,68,0.08)',  border: T.red,    color: T.red },
     default: { bg: 'transparent', border: T.border, color: T.text2 },
   };
   const c = colors[variant] || colors.default;
@@ -180,7 +180,7 @@ export default function TradingControl() {
           {/* Warning */}
           {isAuto && (
             <Box sx={{
-              p: '10px', border: `1px solid ${T.red}44`, background: '#1a0008',
+              p: '10px', border: `1px solid ${T.red}44`, background: 'rgba(239,68,68,0.08)',
               fontSize: '11px', color: T.red,
             }}>
               ⚠ LIVE TRADING ACTIVE — Real funds at risk
@@ -231,7 +231,7 @@ export default function TradingControl() {
                     px: '8px', py: '2px', fontSize: '10px', fontWeight: 600, cursor: 'pointer',
                     border: `1px solid ${logFilter === f ? T.green : T.border}`,
                     color: logFilter === f ? T.green : T.dim,
-                    background: logFilter === f ? '#001e28' : 'transparent',
+                    background: logFilter === f ? 'rgba(168,85,247,0.1)' : 'transparent',
                   }}
                 >
                   {f}

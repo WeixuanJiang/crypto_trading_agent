@@ -7,15 +7,15 @@ body {
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #080c0f;
-  color: #c0c8d0;
+  background-color: #050914;
+  color: #cbd5e1;
   overflow: hidden;
 }
 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: #080c0f; }
-::-webkit-scrollbar-thumb { background: #1c2830; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #2a4050; }
+::-webkit-scrollbar-track { background: #050914; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
 
 @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
 @keyframes scan {

@@ -38,7 +38,7 @@ import { ChartSkeleton } from '../common/LoadingSkeleton';
 const Candlestick = (props) => {
   const { x, y, width, height, open, close, high, low, fill } = props;
   const isRising = close > open;
-  const color = isRising ? '#00e676' : '#ff1744';
+  const color = isRising ? '#22c55e' : '#ef4444';
   const ratio = Math.abs(height / (high - low));
 
   return (
